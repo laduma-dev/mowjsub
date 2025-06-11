@@ -13,7 +13,6 @@ from contsub.utils import zds_from_fits, get_automask
 import dask.array as da
 import time
 import numpy as np
-import xarray as xr
 import dask.multiprocessing
 
 log = init_logger(BIN.im_plane)
@@ -64,11 +63,12 @@ def runit(**kwargs):
     else:
         cube = zds.DATA
     
-    sdim = (None,) # scalar dimension
     niter = 1
     nomask = True 
+    filemask = False
     if getattr(opts, "mask_image", None):
         mask = zds_from_fits(opts.mask_image, chunks=chunks).DATA
+        filemask = True
         nomask = False
             
     
@@ -85,22 +85,34 @@ def runit(**kwargs):
     
     dask.config.set(scheduler='threads', num_workers = opts.nworkers)
     
+    prev_sclip = opts.sigma_clip[0]
+    sigma_clip = list(opts.sigma_clip)
     for iter_i in range(niter):
         futures = []
         fitfunc = FitBSpline(opts.order[iter_i], opts.segments[iter_i])
+        
+        if nomask: 
+            try:
+                sclip = sigma_clip[iter_i]
+            except IndexError:
+                sclip = prev_sclip
+            finally:
+                prev_sclip = sclip
         
         for biter,dblock in enumerate(cube.data.blocks):
             if nomask and opts.automask:
                 mask_future = get_mask(xspec,
                                     dblock,
-                                    opts.sigma_clip[0], 
+                                    sclip, 
                                     opts.order[iter_i],
                                     opts.segments[iter_i],
                 )
+                nomask = False
             elif nomask is False:
                 mask_future = mask.data.blocks[biter]
             else:
                 mask_future = da.zeros_like(dblock, dtype=bool)
+                
             
             contfit = ContSub(fitfunc, nomask=False, reshape=False, fitsaxes=False)
             getfit = da.gufunc(

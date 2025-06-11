@@ -27,7 +27,11 @@ inputs:
     default:
     - 5
     - 4
-    - 3 
+    - 3
+  automask-per-iter:
+    info: Generate a new mask per iteration.
+    dtype: bool
+    default: False
   fit-model:
     dtype: str
     choices:
