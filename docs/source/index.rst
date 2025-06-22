@@ -10,10 +10,11 @@ Welcome to contsub's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   how-to/installation
+   how-to/usage
+   tutorials/tutorials
+   reference/reference
 
-
-.. automodule:: contsub
-   :members:
 
 
 

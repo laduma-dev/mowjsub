@@ -45,6 +45,7 @@ extensions = [
     "sphinx.ext.doctest",
     "sphinx.ext.intersphinx",
     "sphinx.ext.extlinks",
+    "sphinx_click.ext",
 ]
 
 # The suffix(es) of source filenames.
