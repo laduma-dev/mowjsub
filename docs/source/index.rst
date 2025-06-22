@@ -12,7 +12,7 @@ Welcome to contsub's documentation!
 
 
 
-.. automodule:: your_module
+.. automodule:: contsub
    :members:
 
 
