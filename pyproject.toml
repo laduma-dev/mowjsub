@@ -4,7 +4,7 @@ version = "1.0.2"
 description = "Radio astronomy data continuum subtraction tools"
 authors = ["Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo"]
 license = "MIT"
-readme = "README.md"
+readme = "README.rst"
 
 [build-system]
 requires = ["poetry-core"]
