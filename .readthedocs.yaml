@@ -18,9 +18,7 @@ build:
   jobs:
     post_install:
       - pip install poetry>=1.4.0
-      - poetry config virtualenvs.create true
-      - poetry config virtualenvs.in-project true
-      - poetry install --with docs
+      - pip install -e .[docs]
 
 # Build documentation in the docs/ directory with Sphinx
 sphinx:
