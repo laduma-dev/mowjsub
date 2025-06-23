@@ -25,7 +25,7 @@ inputs:
     policies:
       repeat: "[]"
   fit-model:
-    info: Fit function to model the continuum. ** Only the spline is available in this version **.
+    info: "### NOT IMPLEMENTED ### Fit function to model the continuum."
     dtype: str
     choices:
       - spline
