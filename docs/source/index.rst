@@ -12,8 +12,8 @@ Welcome to contsub's documentation!
 
    how-to/installation
    how-to/usage
-   tutorials/tutorials
    reference/reference
+   tutorials/tutorials
 
 
 
