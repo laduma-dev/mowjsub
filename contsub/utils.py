@@ -12,6 +12,11 @@ import astropy.io.fits as fitsio
 from scabha.basetypes import File
 import numpy as np
 import datetime
+from astropy.time import Time
+from daskms import xds_from_ms, xds_from_table
+import dask.array as da
+from dask.diagnostics import ProgressBar
+
 log = init_logger(BIN.im_plane)
 
 
@@ -214,3 +219,102 @@ class FitsHeader():
         self._header['DATE'] = str(datetime.datetime.now()).replace(' ','T')
         self._header['ORIGIN'] = 'A. Kazemi-Moridani (spatial_split)'
         return self._header
+
+def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
+                          outchunks = {'time': 64, 'baseline': 64}, save_to_zarr=False):
+    
+    """ Creates Zarr store from a input MS. The resulting array has 
+    dimensions = time, basline, SPECTRAL, corr
+
+    Args:
+        ms path (str|path): MS file_
+        spw_id (int): Spectral window ID
+        field_id (int): Field ID
+        chunks (int): How to chunk the data
+        outchunks (dict, optional): xarray chunk object. Defaults to {'time': 64, 'baseline': 64}.
+        save_to_zarr (bool, optional): Save the output to Zarr. Defaults to False.  
+    Returns:
+        Zarr: Zarr array (persistant store, mode=w)
+    """
+    ms_dsl = xds_from_ms(
+        ms_path, 
+        index_cols=["TIME", "ANTENNA1", "ANTENNA2"],
+        chunks={"row": chunks } 
+    )
+    
+
+    spw_table = xds_from_table(f"{ms_path}::SPECTRAL_WINDOW")[0]
+    field_table = xds_from_table(f"{ms_path}::FIELD")[0]
+    antenna_table = xds_from_table(f"{ms_path}::ANTENNA")[0]
+
+    frequencies = spw_table.CHAN_FREQ.data[spw_id] 
+    channel_width = spw_table.CHAN_WIDTH.data[spw_id][0]  
+    ref_frequency = spw_table.REF_FREQUENCY.data[spw_id]
+
+    phase_center = field_table.PHASE_DIR.data[field_id].compute()[0] 
+
+    antenna_names = [name.strip() for name in antenna_table.NAME.data.compute()]
+    ds = ms_dsl[0]
+    
+    times = ds.TIME.data 
+    antenna1 = ds.ANTENNA1.data
+    antenna2 = ds.ANTENNA2.data
+    visibilities = ds.DATA.data
+    flags = ds.FLAG.data
+    weights = ds.WEIGHT_SPECTRUM.data 
+    uvw = ds.UVW.data
+    
+    nant = antenna_table.NAME.size
+    nbl = nant*(nant-1) // 2
+    nrow, nchan, ncorr = ds.DATA.shape
+    ntimes = nrow // nbl
+
+    unique_times = np.unique(times)
+
+
+    reshaped_vis = da.reshape(visibilities, (ntimes, nbl, nchan, ncorr))
+    reshaped_flags = da.reshape(flags, (ntimes, nbl, nchan, ncorr))
+    reshaped_weights = da.reshape(weights, (ntimes, nbl, nchan, ncorr))
+    
+    if ncorr == 2:  
+        corr_labels = ['XX', 'YY'][:ncorr]
+    else:
+        corr_labels = ['XX', 'XY', 'YX', 'YY'][:ncorr]
+
+    dataset = xr.Dataset(
+        {   #TO-DO: reshape the data for all 
+            'vis': ([ 'time', 'baseline' , 'spectral', 'corr'], reshaped_vis), #time here will be time indicies
+            'flags': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_flags),
+            'weights': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_weights),
+            'uvw': (('time', 'baseline', 'coord'), uvw.reshape(ntimes, nbl, 3)),
+        },
+        coords={
+            'spectral': frequencies,  
+            'corr': corr_labels, 
+            'time': unique_times,
+            'baseline': np.arange(nbl),
+        },
+        attrs={
+            
+            'ref_freq': float(ref_frequency),
+            'channel_width': float(channel_width),
+            'phase_center_ra': float(phase_center[0]),  # radians
+            'phase_center_dec': float(phase_center[1]),  # radians
+            'phase_center_ra_deg': float(np.degrees(phase_center[0])),  # degrees
+            'phase_center_dec_deg': float(np.degrees(phase_center[1])),  # degrees
+            'antenna_names': antenna_names,
+            'n_antennas': nant,
+            'spw_id': spw_id,
+            'field_id': field_id
+        })
+    dataset = dataset.chunk(outchunks)
+    if not save_to_zarr:
+        return dataset
+    else:
+        outpath = f'{ms_path}-spw{spw_id}-field{field_id}-tmp.zarr'
+        write_to_zarr = dataset.to_zarr(outpath, mode='w', compute=False)
+
+        with ProgressBar():
+            da.compute(write_to_zarr)
+
+        return outpath

@@ -1,0 +1,61 @@
+libs:
+  spline:
+    _include: (contsub.parser.library)spline.yaml
+  polyn:
+    _include: (contsub.parser.library)polyn.yaml
+
+inputs:
+  ms:
+    info: Input MS file
+    dtype: File
+    must_exist: yes
+    required: yes
+  spwid:
+        info: Spectral Window ID
+        dtype: int
+        default: 0
+  field-id:
+        info: Field ID 
+        dtype: int
+        default: 0
+  row-chunks: #TO-DO: check
+        info: Chunking strategy (Done along the time axis)
+        dtype: int
+        default: 10000
+  time-chunks:
+    info: Chunk size for time axis
+    dtype: int
+    default: 64
+  bl-chunks:
+    info: Chunk size for baseline axis
+    dtype: int
+    default: 10
+  output-column:
+    info: Column name to write the continuum subtracted data to
+    dtype: str
+    default: corrected
+  fit-model:
+    info: Fit function to model the continuum. ** Only the spline is available in this version **.
+    dtype: str
+    choices:
+      - spline
+    default: spline
+  cont-fit-tol:
+    info: "Minimum perentage of valid spectrum data points required to do a fit.
+          Spectra below this tolerance will be set to NaN."
+    dtype: float
+    default: 0
+  output:
+    info: Output file prefix
+    dtype: File
+    default: contsub_output
+  nworkers:
+    info: Number of workers (one per CPU)
+    dtype: int
+    default: 4
+  _use:
+    - libs.spline.inputs
+
+
+outputs:
+  {}

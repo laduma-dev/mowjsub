@@ -57,7 +57,7 @@ class FitBSpline(FitFunc):
         """
         self.order = order
         self.velwidth = velWidth
-        self.preped = False
+        self.preped = False  
         if randomState and seq:
             rs = np.random.SeedSequence(entropy = randomState, spawn_key = (seq,))
         else:
@@ -74,6 +74,10 @@ class FitBSpline(FitFunc):
         weight : weights for fitting the Spline. 
             To mask values, set the corresponding weight to zero.
         """
+
+        if not self.preped:
+            self.prepare(x)
+            
         nchan = len(x)
         knotind = np.linspace(0, nchan, self.imax, dtype = int)[1:-1]
         chwid = (nchan // self.imax) // 8
