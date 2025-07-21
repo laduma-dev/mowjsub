@@ -10,6 +10,7 @@ from scabha import init_logger
 from contsub.image_plane import ContSub
 from contsub.fitfuncs import FitBSpline
 import astropy.io.fits as fitsio
+from astropy.wcs import WCS
 from contsub.utils import zds_from_fits, get_automask, subtract_fits
 import dask.array as da
 import time
@@ -53,35 +54,29 @@ def runit(**kwargs):
     if not infits.EXISTS:
         raise FileNotFoundError(f"Input FITS image could not be found at: {infits.PATH}")
     
-    chunks = dict(ra = opts.ra_chunks or 64, dec=None, spectral=None)
+    ra_chunks = opts.ra_chunks or 64
+    chan_chunks = opts.chan_chunks or 64
     
-
-    zds = zds_from_fits(infits, chunks=chunks)
-    base_dims = ["ra", "dec", "spectral", "stokes"]
-    if not hasattr(zds, "stokes"):
-        base_dims.remove("stokes")
+    wcs = WCS(infits)
+    
+    nchan = zds.shape[2]
+    zds, header = zds_from_fits(opts.mask_image, stokes=opts.stokes_index,
+                                ra_chunks=ra_chunks, chan_chunks=chan_chunks)
     
     dims_string = "ra,dec,spectral"
-    has_stokes = "stokes" in base_dims
-    stokes_idx = opts.stokes_index
-    
-    log.info(f"Input data dimensions: {zds.DATA.dims}")
-    log.info(f"Input data shape: {zds.DATA.shape}")
-    
-    if has_stokes:
-        cube = zds.DATA[...,stokes_idx]
-    else:
-        cube = zds.DATA
+    has_stokes = zds.attrs["has_stokes"]
     
     if len(opts.order) != len(opts.segments):
         raise ValueError("If setting multiple --order and --segments, they must be of equal length. "
-                         f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
+                        f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
+    
     niter = len(opts.order)
     
     nomask = True
     automask = False 
     if getattr(opts, "mask_image", None):
-        mask = zds_from_fits(opts.mask_image, chunks=chunks).DATA
+        mask = zds_from_fits(opts.mask_image, stokes=opts.stokes_index,
+                    ra_chunks=ra_chunks, chan_chunks=chan_chunks)
         nomask = False
     
     if getattr(opts, "sigma_clip", None):
@@ -98,16 +93,16 @@ def runit(**kwargs):
     get_mask = da.gufunc(
         get_automask,
         signature=f"(spectral),({dims_string}),(),(),() -> ({dims_string})",
-        meta=(np.ndarray((), cube.dtype),),
+        meta=(np.ndarray((), zds.dtype),),
         allow_rechunk=True,
     )
 
     signature = f"(spectral),({dims_string}),({dims_string}) -> ({dims_string})"
-    meta = (np.ndarray((), cube.dtype),)
-    xspec = zds.FREQS.data
+    meta = (np.ndarray((), zds.dtype),)
+    xspec = wcs.array_index_to_world_values(np.arange(nchan))
     
     dask.config.set(scheduler='threads', num_workers = opts.nworkers)
-    dblocks = cube.data.blocks
+    dblocks = zds.blocks
     for iter_i in range(niter):
         log.info(f"Loading delayed compute for iteration {iter_i+1}/{niter} of continuum modelling.")
         futures = []
@@ -146,8 +141,7 @@ def runit(**kwargs):
     continuum = da.concatenate(futures).transpose((2,1,0))
     if has_stokes:
         continuum = continuum[np.newaxis,...]
-        
-    header = zds.attrs["header"]
+    
     out_ds_cont = fitsio.PrimaryHDU(continuum, header=header)
     
     out_ds_cont.writeto(outcont, overwrite=opts.overwrite)

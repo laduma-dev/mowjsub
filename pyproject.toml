@@ -16,6 +16,7 @@ numpy = "^1.22.4"
 astropy = "^6.0.0"
 scipy = "^1.12.0"
 xarray-fits = "*"
+zarr = "*"
 stimela = "^2.1.2"
 
 
@@ -24,6 +25,7 @@ imcontsub = "contsub.parser.imcontsub:runit"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "*"
+matplotlib = "*"
 
 [tool.poetry.group.tests]
 optional = true

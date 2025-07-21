@@ -8,10 +8,11 @@ from contsub import BIN
 from typing import Dict
 from scabha import init_logger
 import astropy.units as u
-import astropy.io.fits as fitsio
+import astropy.io.fits as fits
 from scabha.basetypes import File
 import numpy as np
 import datetime
+import zarr
 log = init_logger(BIN.im_plane)
 
 
@@ -43,7 +44,63 @@ def get_automask(xspec, cube, sigma_clip=5, order=3, segments=400):
     return mask
 
 
-def zds_from_fits(fname, chunks=None):
+def zds_from_fits(fname, stokes=0, ra_chunks=256, chan_chunks=256, return_header=False):
+
+    hdu_list = fits.open(fname, memmap=True, lazy_load_hdus=True)
+    phdu = hdu_list[0]
+    wcs = WCS(fname)
+    
+    orig_dims = [item.lower() for item in wcs.axis_type_names][::-1]
+    zstore = f"f{fname}-store.zarr"
+    
+    shape = wcs.array_shape
+    has_stokes = False
+    
+    slc = []
+    ra_idx = None
+    for idx, dim in enumerate(orig_dims):
+        if dim == "ra":
+            slc.append(slice(None))
+            ra_idx = idx
+        elif dim.startswith("freq") or dim.startswith("vrad"):
+            slc.append(slice(None))
+            spectral_idx = idx
+        elif dim.startswith("stokes"):
+            slc.append(stokes)
+            has_stokes = True
+        elif dim.startswith("dec"):
+            slc.append(slice(None))
+            dec_idx = idx
+        else:
+            slc.append(0)
+    
+    nra =  shape[ra_idx]
+    ndec = shape[dec_idx]
+    nchan = shape[spectral_idx]
+    
+    dtype = getattr(np, f"float{abs(phdu.header['BITPIX'])}")
+    zds = zarr.create_array(
+        store = zstore,
+        shape = (nra, ndec, nchan),
+        dimension_names = ("ra", "dec", "spectral"),
+        chunks = (ra_chunks, ndec, nchan),
+        attributes = dict(fname=fname, has_stokes=has_stokes),
+        overwrite = True,
+        dtype = dtype,
+)
+    
+    for chunk_start in range(0, nchan, chan_chunks):
+        chunk_end = chunk_start + chan_chunks
+        slc[spectral_idx] = slice(chunk_start, chunk_end, 1)
+        zds[:,:,chunk_start:chunk_end] = phdu.section[tuple(slc)].transpose(2,1,0)
+        
+    if return_header:
+        return zds, phdu.header
+    else:
+        return zds
+
+
+def xds_from_fits2(fname, chunks=None):
     """ Creates Zarr store from a FITS file. The resulting array has 
     dimensions = RA, DEC, SPECTRAL[, STOKES]
 
@@ -84,7 +141,7 @@ def zds_from_fits(fname, chunks=None):
         coords = coords,
         attrs = dict(
             info =f"Temporary copy of data from FITS file: {fname}",
-            header = fitsio.Header(header),
+            header = fits.Header(header),
                     ),
     )
 
@@ -111,8 +168,8 @@ def subtract_fits(data_file: File, model_file: File, chunks: Dict):
         residual_ds, 
         data_ds.hdu.attrs),
     )
-    header = fitsio.Header(data_ds.hdu.header)
-    return fitsio.PrimaryHDU(out_ds.hdu.data, header=header)
+    header = fits.Header(data_ds.hdu.header)
+    return fits.PrimaryHDU(out_ds.hdu.data, header=header)
 
 
 class FitsHeader():
