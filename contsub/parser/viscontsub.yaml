@@ -10,6 +10,10 @@ inputs:
     dtype: File
     must_exist: yes
     required: yes
+  input-column:
+    info: Column which contains the data to be continuum subtracted.
+    dtype: str
+    default: DATA   
   spwid:
         info: Spectral Window ID
         dtype: int
@@ -33,12 +37,13 @@ inputs:
   output-column:
     info: Column name to write the continuum subtracted data to
     dtype: str
-    default: corrected
+    default: CONTSUB_DATA_LINE
   fit-model:
     info: Fit function to model the continuum. ** Only the spline is available in this version **.
     dtype: str
     choices:
       - spline
+      - polynomial
     default: spline
   cont-fit-tol:
     info: "Minimum perentage of valid spectrum data points required to do a fit.
@@ -53,6 +58,14 @@ inputs:
     info: Number of workers (one per CPU)
     dtype: int
     default: 4
+  load-from-cache:
+    info: Load the MS from a cache (Zarr store) if available, otherwise create it.
+    dtype: bool
+    default: False
+  cache-dir:
+    info: Directory to store the cache (Zarr store) in.
+    dtype: Directory
+    default: contsub_cache_dir
   _use:
     - libs.spline.inputs
 

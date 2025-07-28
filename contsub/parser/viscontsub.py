@@ -12,9 +12,9 @@ import time
 import numpy as np
 import xarray as xr
 import dask.multiprocessing
-from contsub.utils import ms_to_xarray_dataset
+from contsub.utils import ms_to_xarray_dataset, get_ds_from_msdsl
 from contsub.visibility_plane import VisContSub
-from contsub.fitfuncs import FitBSpline
+from contsub.fitfuncs import FitBSpline, FitPolynomial
 from dask.diagnostics import ProgressBar
 from tqdm.dask import TqdmCallback
 from daskms import xds_from_ms, xds_to_table
@@ -45,30 +45,37 @@ def runit(**kwargs):
     output_prefix = opts.output
     nworkers = opts.nworkers
     outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
+    input_column = opts.input_column
     output_column = opts.output_column
 
-    temp_zarr = ms_to_xarray_dataset(ms, spwid, fieldid, chunksize, save_to_zarr=True)
+    #if load_from_cache := opts.load_from_cache:
+    temp_zarr = ms_to_xarray_dataset(ms,  spwid, fieldid, chunksize, save_to_zarr=True)
+    #TODO(mika): consider caching the MS to a Zarr store
+    temp_zarr = 'tmp.zarr' 
     ds = xr.open_zarr(temp_zarr, chunks=outchunks)
     
-    xspec = ds.coords['spectral']
+    xspec = ds.coords['FREQ']
 
     futures = []
     
     if method == 'spline':
         fitfunc = FitBSpline(order, segments, randomState=None, seq=None)
+    elif method == 'polynomial':
+        fitfunc = FitPolynomial(order)
     else:
-        raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline'.")
-    base_dims = "time,baseline,spectral,corr"
-    signature = f"(spectral),({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
-    meta = (np.ndarray((), ds.vis.dtype),)
+        raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline', 'polynomial'.")
+    
+    base_dims = "TIME, BASELINE, FREQ, CORR"
+    signature = f"(FREQ),({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
+    meta = (np.ndarray((), ds.VIS.dtype),)
 
     dask.config.set(scheduler='threads', num_workers = nworkers)
 
-    for biter, dblock in enumerate(ds.vis.data.blocks):
+    for biter, dblock in enumerate(ds.VIS.data.blocks):
         #if biter > 0:
             #continue
-        flags = ds.flags.data.blocks[biter]
-        weights = ds.weights.data.blocks[biter]
+        flags = ds.FLAG.data.blocks[biter]
+        weights = ds.WEIGHT.data.blocks[biter]
 
         contfit = VisContSub(fitfunc, fit_tol=opts.cont_fit_tol)
         get_cont = da.gufunc(
@@ -90,53 +97,46 @@ def runit(**kwargs):
     
     continuum_xarray = xr.DataArray(
     data=continuum_dask,
-    dims=ds.vis.dims,
-    coords=ds.vis.coords
+    dims=ds.VIS.dims,
+    coords=ds.VIS.coords
     )
 
     continuum = continuum_xarray.stack(row = ('time','baseline'))
-    continuum = continuum.transpose("row",...)
+    continuum = continuum.transpose("row",...).chunk({"row": chunksize})
 
-    visdata = ds.vis.stack(row=('time', 'baseline')).transpose("row", ...)
-
-    line = visdata - continuum
     
     ms_dsl = xds_from_ms(
         ms, 
         index_cols=["TIME", "ANTENNA1", "ANTENNA2"],
+        group_cols=["FIELD_ID", "DATA_DESC_ID"],
         chunks={"row": chunksize } 
     )
     
-    #debugging_prints
-    #print(f"Total MS rows: {sum(ds_chunk.sizes['row'] for ds_chunk in ms_dsl)}")
-    #print(f"Line data shape: {line.shape}")
-    #print(f"Line data dims: {line.dims}")
-    #print(f"Line data chunks: {line.chunks}")
-
-    #for i, ds_chunk in enumerate(ms_dsl):
-        #print(f"Chunk {i}: {ds_chunk.sizes['row']} rows")
+    #continuum= da.from_array(continuum, chunks={"row": chunksize })
     
-    writes = []
-    start_row = 0
+    
+    msds = get_ds_from_msdsl(ms_dsl, spwid, fieldid)
+    
 
-    for i, ds_chunk in enumerate(ms_dsl):
-        num_rows_in_chunk = ds_chunk.sizes['row']
-        end_row = start_row + num_rows_in_chunk
-
-        line_slice = line[start_row:end_row, :, :]
-        target_row_chunks = ds_chunk.chunks['row']
-        line_slice_rechunked = line_slice.chunk({'row': target_row_chunks})
-
-        ms_dsl[i] = ds_chunk.assign(**{
-        output_column: (("row", "chan", "corr"), line_slice_rechunked.data)
+        
+    #import pdb; pdb.set_trace()  
+    ms_ds = msds.assign(**{
+        output_column: (
+            ("row", "chan", "corr"),
+            getattr(msds, input_column).data - continuum.data,
+            ),
         })
-
-    writes.append(xds_to_table(ms_dsl, ms, [output_column]))
+   
+    
+    #writes = [xds_to_table(msds, ms+".new", [output_column])]
+    #TODO(mika): add functionality to write to a new MS
+    
+    writes = [xds_to_table(ms_ds, ms, [output_column])]
     print(f"Writing line data to column '{output_column}' in {ms}...")
 
 
     with TqdmCallback(desc="Writing line data to MS"):
-        da.compute(*writes)
+        da.compute(writes)
     print(f"UV plane continuum subtraction completed. Data written to column '{output_column}' in {ms}.")
 
     # DONE

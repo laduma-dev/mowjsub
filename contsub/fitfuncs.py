@@ -132,3 +132,47 @@ class FitMedFilter(FitFunc):
         # resMed = nanMed[~np.isnan(nanMed)]
         resMed = nanMed
         return resMed, cp_data-resMed
+
+class FitPolynomial(FitFunc):
+    """
+    Polynomial fitting function using numpy.polyfit
+    """
+    def __init__(self, order):
+        """
+        order (int): Order/degree of the polynomial
+        """
+        self.order = order
+        self.preped = False
+        
+    def prepare(self, x):
+        """
+        Prepare for polynomial fitting 
+        """
+        nchan = len(x)
+        log.info(f"Polynomial fitting: nchan = {nchan}, order = {self.order}")
+        self.preped = True
+    
+    def fit(self, x, data, weights=None):
+        """
+        Fit polynomial to data
+        
+        Args:
+            x: x values for the fit
+            data: values to be fit by polynomial
+            mask: boolean mask for valid data points (optional)
+            weights: weights for fitting (optional)
+            
+        Returns:
+            poly_fit: polynomial evaluated at x points
+        """
+        if not self.preped:
+            self.prepare(x)
+        
+        if weights is not None:
+            poly_coeffs = np.polyfit(x, data, self.order, w=weights)
+        else:
+            poly_coeffs = np.polyfit(x, data, self.order)
+        
+        poly_fit = np.polyval(poly_coeffs, x)
+        
+        return poly_fit

@@ -219,7 +219,18 @@ class FitsHeader():
         self._header['DATE'] = str(datetime.datetime.now()).replace(' ','T')
         self._header['ORIGIN'] = 'A. Kazemi-Moridani (spatial_split)'
         return self._header
-
+    
+def get_ds_from_msdsl(ms_dsl, field_id=0, data_desc_id=0):
+    found_ds = False
+    for ds in ms_dsl:
+        if ds.FIELD_ID == field_id and ds.DATA_DESC_ID == data_desc_id:
+            found_ds = True
+            break
+    if found_ds:
+        return ds
+    else:
+        raise ValueError("Dataset with FIELD_ID=1 and DATA_DESC_ID=1 not found in the MS.")
+    
 def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
                           outchunks = {'time': 64, 'baseline': 64}, save_to_zarr=False):
     
@@ -239,6 +250,7 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
     ms_dsl = xds_from_ms(
         ms_path, 
         index_cols=["TIME", "ANTENNA1", "ANTENNA2"],
+        group_cols=["FIELD_ID", "DATA_DESC_ID"],
         chunks={"row": chunks } 
     )
     
@@ -254,7 +266,7 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
     phase_center = field_table.PHASE_DIR.data[field_id].compute()[0] 
 
     antenna_names = [name.strip() for name in antenna_table.NAME.data.compute()]
-    ds = ms_dsl[0]
+    ds = get_ds_from_msdsl(ms_dsl, field_id=field_id, data_desc_id=spw_id)
     
     times = ds.TIME.data 
     antenna1 = ds.ANTENNA1.data
@@ -270,6 +282,7 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
     ntimes = nrow // nbl
 
     unique_times = np.unique(times)
+    
 
 
     reshaped_vis = da.reshape(visibilities, (ntimes, nbl, nchan, ncorr))
@@ -283,16 +296,16 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
 
     dataset = xr.Dataset(
         {   #TO-DO: reshape the data for all 
-            'vis': ([ 'time', 'baseline' , 'spectral', 'corr'], reshaped_vis), #time here will be time indicies
-            'flags': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_flags),
-            'weights': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_weights),
-            'uvw': (('time', 'baseline', 'coord'), uvw.reshape(ntimes, nbl, 3)),
+            'VIS': ([ 'time', 'baseline' , 'spectral', 'corr'], reshaped_vis), #time here will be time indicies
+            'FLAG': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_flags),
+            'WEIGHT': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_weights),
+            'UVW': (('time', 'baseline', 'uvw'), uvw.reshape(ntimes, nbl, 3)),
         },
         coords={
-            'spectral': frequencies,  
-            'corr': corr_labels, 
-            'time': unique_times,
-            'baseline': np.arange(nbl),
+            'FREQ': frequencies,  
+            'CORR':corr_labels, 
+            'TIME': unique_times,
+            'BASELINE': np.arange(nbl),
         },
         attrs={
             
@@ -303,15 +316,15 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
             'phase_center_ra_deg': float(np.degrees(phase_center[0])),  # degrees
             'phase_center_dec_deg': float(np.degrees(phase_center[1])),  # degrees
             'antenna_names': antenna_names,
-            'n_antennas': nant,
-            'spw_id': spw_id,
-            'field_id': field_id
+            'nant': nant,
+            'DATA_DESC_ID': spw_id,
+            'FIELD_ID': field_id
         })
     dataset = dataset.chunk(outchunks)
     if not save_to_zarr:
         return dataset
     else:
-        outpath = f'{ms_path}-spw{spw_id}-field{field_id}-tmp.zarr'
+        outpath = f'tmp.zarr'
         write_to_zarr = dataset.to_zarr(outpath, mode='w', compute=False)
 
         with ProgressBar():
