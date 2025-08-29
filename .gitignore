@@ -13,6 +13,12 @@ __pycache__/
 # C extensions
 *.so
 
+# Astro misc
+*.fits
+*.zarr
+*.ms
+*.ipynb
+
 # Distribution / packaging
 .Python
 build/

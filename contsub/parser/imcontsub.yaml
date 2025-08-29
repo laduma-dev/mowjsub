@@ -33,24 +33,26 @@ inputs:
     dtype: bool
     default: False
   fit-model:
+    info: "### NOT IMPLEMENTED ### Fit function to model the continuum."
     dtype: str
     choices:
-      - polyn
       - spline
-      - dct
     default: spline
-  automask:
-    info: Generate mask from input cube
-    dtype: bool
-    default: False
+  cont-fit-tol:
+    info: "Minimum perentage of valid spectrum data points required to do a fit.
+          Spectra below this tolerance will be set to NaN.
+          Leaving this unset may result in poor or NaN spectra in the output cubes"
+    dtype: float
+    default: 0
   overwrite:
     info: Overwrite output image if it already exists
     dtype: bool
     default: yes
   stokes-index:
-    info: Index of stokes channel (zero-based) to use.
+    info: "Index of stokes channel (zero-based) to use."
     dtype: int
     default: 0
+    choices: [0,1,2,3]
   stokes-axis:
     info: "### DEPRECATED #### Set this flag if the input image has a stokes dimension. (Default is True)."
     default: yes
@@ -63,8 +65,17 @@ inputs:
     info: Number of workers (one per CPU)
     dtype: int
     default: 4
+  loglevel:
+    info: Log level for the output
+    dtype: str
+    default: info
+    choices:
+      - info
+      - debug
+      - trace
+      - error
+      - critical
   _use:
   - libs.spline.inputs
-# _use: IF(current.fit-model == spline, libs.spline.inputs, libs.polyn.inputs)
 outputs:
   {}

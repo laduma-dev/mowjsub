@@ -6,14 +6,16 @@ from omegaconf import OmegaConf
 import glob
 import os
 from contsub import BIN
-from contsub.cubes import RCube, FitsHeader
-from contsub.imcontsub import FitBSpline, ContSub, Mask, PixSigmaClip
 from scabha import init_logger
+from contsub.image_plane import ContSub
+from contsub.fitfuncs import FitBSpline
 import astropy.io.fits as fitsio
-import numpy as np
+from contsub.utils import zds_from_fits, get_automask, subtract_fits
+import dask.array as da
 import time
+import numpy as np
+import dask.multiprocessing
 
-log = init_logger(BIN.im_plane)
 
 command = BIN.im_plane
 thisdir  = os.path.dirname(__file__)
@@ -22,12 +24,20 @@ sources = [File(item) for item in source_files]
 parserfile = File(f"{thisdir}/{command}.yaml")
 config = paramfile_loader(parserfile, sources)[command]
 
-start_time = time.time()
-@click.command(command)
+log = init_logger(BIN.im_plane)
+
+@click.command("imcontsub")
 @click.version_option(str(contsub.__version__))
 @clickify_parameters(config)
-def runit(**kwargs):
+def runit(**kwargs):    
+    start_time = time.time()
+    
     opts = OmegaConf.create(kwargs)
+    
+    if opts.cont_fit_tol > 100:
+        log.warning("Requested --cont-fit-tol is larger than 100 percent. Assuming it is 100.")
+        opts.cont_fit_tol = 100
+        
     infits = File(opts.input_image)
     
     if opts.output_prefix:
@@ -42,80 +52,114 @@ def runit(**kwargs):
     
     if not infits.EXISTS:
         raise FileNotFoundError(f"Input FITS image could not be found at: {infits.PATH}")
-    # get rid of stokes axis if it exists
-    # TODO(sphe) Automate this
-    # Needs to fixed later
-    if opts.stokes_axis:
-        dslice = 0, slice(None), slice(None), slice(None)
-    else:
-        dslice = slice(None)
-        
-    if len(opts.order) != len(opts.segments):
-        raise RuntimeError("The --order and --segments lists must be the size.")
-    niter = len(opts.segments)
-    # get Fits image cube primary HDU
-    with fitsio.open(opts.input_image) as hdul:
-        header = hdul[0].header
-        cube = hdul[0].data[dslice]
-        freqs = FitsHeader(header).retFreq()         
     
-    #get the mask for the first round
+    chunks = dict(ra = opts.ra_chunks or 64, dec=None, spectral=None)
+    
+
+    zds = zds_from_fits(infits, chunks=chunks)
+    base_dims = ["ra", "dec", "spectral", "stokes"]
+    if not hasattr(zds, "stokes"):
+        base_dims.remove("stokes")
+    
+    dims_string = "ra,dec,spectral"
+    has_stokes = "stokes" in base_dims
+    stokes_idx = opts.stokes_index
+    
+    log.info(f"Input data dimensions: {zds.DATA.dims}")
+    log.info(f"Input data shape: {zds.DATA.shape}")
+    
+    if has_stokes:
+        cube = zds.DATA[...,stokes_idx]
+    else:
+        cube = zds.DATA
+    
+    if len(opts.order) != len(opts.segments):
+        raise ValueError("If setting multiple --order and --segments, they must be of equal length. "
+                         f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
+    niter = len(opts.order)
+    
     nomask = True
-    if opts.mask_image:
-        log.info("Loading mask image")
-        mask = fitsio.getdata(opts.mask_image)[dslice]
-        mask_isnan = np.isnan(mask)
-        
-        if mask_isnan.any():
-            mask[mask_isnan] = 0
-            mask[~mask_isnan] = 1
-        else:
-            del mask_isnan
-            mask = ~np.array(mask, dtype=bool)
+    automask = False 
+    if getattr(opts, "mask_image", None):
+        mask = zds_from_fits(opts.mask_image, chunks=chunks).DATA
         nomask = False
     
-    prev_sclip = opts.sigma_clip[0]
-    sigma_clip = list(opts.sigma_clip)
-    for i in range(niter):
-        
-        fitfunc = FitBSpline(*[opts.order[i], opts.segments[i]])
-        if nomask:
-            if i == 0:
-                log.info(f'Creating initial mask from input image')
-                contsub = ContSub(fitfunc, nomask=True)
-                cont, line = contsub.fitContinuum(freqs, cube, mask=None)
-            
-            #create mask from line emission of first iteration
-            try:
-                sclip = sigma_clip[i]
-            except IndexError:
-                sclip = prev_sclip
-            finally:
-                prev_sclip = sclip
-                
-            clip = PixSigmaClip(sclip)
-            mask = Mask(clip).getMask(line)
-            
-        log.info(f'Running iteration {i+1}')
-        constsub = ContSub(fitfunc, nomask=False, reshape=False)
-        #do the fitting
-        cont, line = constsub.fitContinuum(freqs, cube, mask)
-    log.info("Continuum fitting successful. Ready to write output products.")
-        
-    del cube
-        
+    if getattr(opts, "sigma_clip", None):
+        automask = True
+        sigma_clip = list(opts.sigma_clip)
+    else:
+        sigma_clip = []
     
-    log.debug(f'Pixel sums line: {line.sum()}, cont: {cont.sum()}')
-    if opts.stokes_axis:
-        cont = cont[np.newaxis,...]
-        line = line[np.newaxis,...]
-    log.info("Writing outputs") 
-    fitsio.writeto(outcont, cont, header, overwrite=opts.overwrite)
-    fitsio.writeto(outline, line, header, overwrite=opts.overwrite)
+    if len(sigma_clip) < niter and automask:
+        log.warning(f"Only {len(sigma_clip)} sigma-clips provided, but {niter} iterations requested."
+                    " Using last value for unspecified iterations.")
+        sigma_clip.extend([sigma_clip[-1]] * (niter - len(sigma_clip)))
+    
+    get_mask = da.gufunc(
+        get_automask,
+        signature=f"(spectral),({dims_string}),(),(),() -> ({dims_string})",
+        meta=(np.ndarray((), cube.dtype),),
+        allow_rechunk=True,
+    )
+
+    signature = f"(spectral),({dims_string}),({dims_string}) -> ({dims_string})"
+    meta = (np.ndarray((), cube.dtype),)
+    xspec = zds.FREQS.data
+    
+    dask.config.set(scheduler='threads', num_workers = opts.nworkers)
+    dblocks = cube.data.blocks
+    for iter_i in range(niter):
+        log.info(f"Loading delayed compute for iteration {iter_i+1}/{niter} of continuum modelling.")
+        futures = []
+        fitfunc = FitBSpline(opts.order[iter_i], opts.segments[iter_i])
+        for biter,dblock in enumerate(dblocks):
+            if (nomask and automask) or (iter_i > 0 and automask):
+                mask_future = get_mask(xspec,
+                                    dblock,
+                                    sigma_clip[iter_i], 
+                                    opts.order[iter_i],
+                                    opts.segments[iter_i],
+                )
+            elif nomask is False:
+                mask_future = mask.data.blocks[biter] == False
+            else:
+                mask_future = da.ones_like(dblock, dtype=bool)
+            
+            contfit = ContSub(fitfunc, nomask=False,
+                            fit_tol=opts.cont_fit_tol)
+            
+            getfit = da.gufunc(
+                contfit.fitContinuum,
+                signature=signature,
+                meta=meta,
+                allow_rechunk=True,
+            )
+            
+            futures.append(getfit(
+                xspec,
+                dblock,
+                mask_future,
+            ))
+            
+        dblocks = list(futures)
+    
+    continuum = da.concatenate(futures).transpose((2,1,0))
+    if has_stokes:
+        continuum = continuum[np.newaxis,...]
+        
+    header = zds.attrs["header"]
+    out_ds_cont = fitsio.PrimaryHDU(continuum, header=header)
+    
+    out_ds_cont.writeto(outcont, overwrite=opts.overwrite)
+    log.info(f"Continuum model cube written to: {outcont}")
+    
+    out_ds_line = subtract_fits(infits, outcont, chunks={0: opts.ra_chunks, 1:None, 2:None})
+    log.info(f"Writing residual data (line cube) to: {outline}")
+    out_ds_line.writeto(outline, overwrite=opts.overwrite)
 
     # DONE
     dtime = time.time() - start_time
     hours = int(dtime/3600)
     mins = dtime/60 - hours*60
-    log.info(f"Finished. Runtime {hours} hours and {mins:.2f} minutes")
-    
+    secs = (mins%1) * 60
+    log.info(f"Finished. Runtime {hours}:{int(mins)}:{secs:.1f}")

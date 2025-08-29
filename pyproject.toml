@@ -1,10 +1,14 @@
 [tool.poetry]
 name = "contsub"
-version = "0.1.2"
+version = "1.0.2"
 description = "Radio astronomy data continuum subtraction tools"
 authors = ["Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo"]
 license = "MIT"
-readme = "README.md"
+readme = "README.rst"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
@@ -12,16 +16,27 @@ numpy = "^1.22.4"
 astropy = "^6.0.0"
 scipy = "^1.12.0"
 xarray-fits = "*"
-zarr = "^2.18"
-stimela = {git = "https://github.com/caracal-pipeline/stimela.git", branch="master"}
+stimela = "^2.1.2"
+
 
 [tool.poetry.scripts]
 imcontsub = "contsub.parser.imcontsub:runit"
-dimcontsub = "contsub.parser.dimcontsub:runit"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "*"
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[tool.poetry.group.tests]
+optional = true
+[tool.poetry.group.tests.dependencies]
+pytest = "8.4.1"
+flake8 = "*"
+
+
+[tool.poetry.group.docs]
+optional = true
+[tool.poetry.group.docs.dependencies]
+Sphinx = "^8.1"
+sphinx-copybutton = "*"
+furo = "*"
+sphinx-rtd-theme = "*"
+sphinx_click = "6.0.0"
