@@ -55,8 +55,8 @@ def runit(**kwargs):
     
     chunks = dict(ra = opts.ra_chunks or 64, dec=None, spectral=None)
     
-
-    zds = zds_from_fits(infits, chunks=chunks)
+    rest_freq = opts.rest_freq
+    zds = zds_from_fits(infits, chunks=chunks, rest_freq=rest_freq)
     base_dims = ["ra", "dec", "spectral", "stokes"]
     if not hasattr(zds, "stokes"):
         base_dims.remove("stokes")
@@ -75,13 +75,13 @@ def runit(**kwargs):
     
     if len(opts.order) != len(opts.segments):
         raise ValueError("If setting multiple --order and --segments, they must be of equal length. "
-                         f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
+                    f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
     niter = len(opts.order)
     
     nomask = True
     automask = False 
     if getattr(opts, "mask_image", None):
-        mask = zds_from_fits(opts.mask_image, chunks=chunks).DATA
+        mask = zds_from_fits(opts.mask_image, chunks=chunks, rest_freq=rest_freq).DATA
         nomask = False
     
     if getattr(opts, "sigma_clip", None):

@@ -53,6 +53,9 @@ inputs:
     dtype: int
     default: 0
     choices: [0,1,2,3]
+  rest-freq:
+    info: Cube rest frequency in MHz. Will ignore the one in the FITS header if it exists.
+    dtype: float
   stokes-axis:
     info: "### DEPRECATED #### Set this flag if the input image has a stokes dimension. (Default is True)."
     default: yes
