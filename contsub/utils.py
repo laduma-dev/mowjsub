@@ -43,7 +43,7 @@ def get_automask(xspec, cube, sigma_clip=5, order=3, segments=400):
     return mask
 
 
-def zds_from_fits(fname, chunks=None, rest_freq=None):
+def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0):
     """ Creates Zarr store from a FITS file. The resulting array has 
     dimensions = RA, DEC, SPECTRAL[, STOKES]
 
@@ -59,7 +59,7 @@ def zds_from_fits(fname, chunks=None, rest_freq=None):
         Zarr: Zarr array (persistant store, mode=w)
     """
     chunks = chunks or dict(ra=64,dec=None, spectral=None)
-    fds = xds_from_fits(fname)[0]
+    fds = xds_from_fits(fname, hdus=hdu_idx)[0]
     
     header = fds.hdu.header
     if rest_freq:

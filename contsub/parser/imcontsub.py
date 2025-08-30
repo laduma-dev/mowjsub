@@ -56,7 +56,7 @@ def runit(**kwargs):
     chunks = dict(ra = opts.ra_chunks or 64, dec=None, spectral=None)
     
     rest_freq = opts.rest_freq
-    zds = zds_from_fits(infits, chunks=chunks, rest_freq=rest_freq)
+    zds = zds_from_fits(infits, chunks=chunks, rest_freq=rest_freq, hdu_idx=opts.hdu_index)
     base_dims = ["ra", "dec", "spectral", "stokes"]
     if not hasattr(zds, "stokes"):
         base_dims.remove("stokes")
