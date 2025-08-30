@@ -60,6 +60,11 @@ inputs:
     info: "### DEPRECATED #### Set this flag if the input image has a stokes dimension. (Default is True)."
     default: yes
     dtype: bool
+  hdu-index:
+    info: FITS primary HDU index
+    dtype: int
+    default: 0
+    abbreviation: hi
   ra-chunks:
     info: Chunking along RA-axis. If set to zero, no Chunking is perfomed.
     dtype: int 
