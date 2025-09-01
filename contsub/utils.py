@@ -43,7 +43,7 @@ def get_automask(xspec, cube, sigma_clip=5, order=3, segments=400):
     return mask
 
 
-def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0):
+def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):
     """ Creates Zarr store from a FITS file. The resulting array has 
     dimensions = RA, DEC, SPECTRAL[, STOKES]
 
@@ -63,7 +63,7 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0):
     
     header = fds.hdu.header
     if rest_freq:
-        header["RESTFRQ"] = rest_freq * 1e6 # set it to Hz
+        header["RESTFREQ"] = rest_freq * 1e6 # set it to Hz
     wcs = WCS(header, naxis="spectral stokes".split())
     
 
@@ -78,11 +78,17 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0):
         new_names.append("stokes")
 
     coords = dict([(a,fds.hdu[b].values) for a,b in zip(new_names,axis_names)])
+    if add_freqs:
+        data_vars = {
+            "DATA": (new_names, fds_xyz.data),
+            "FREQS": (("spectral",), FitsHeader(header).retFreq()), 
+        }
+    else:
+        data_vars = {
+            "DATA" : (new_names, fds_xyz.data),
+        }
     ds = xr.Dataset(
-        data_vars = dict(
-            DATA = (new_names, fds_xyz.data),
-            FREQS = (("spectral",), FitsHeader(header).retFreq()), 
-            ),
+        data_vars,
         coords = coords,
         attrs = dict(
             info =f"Temporary copy of data from FITS file: {fname}",
