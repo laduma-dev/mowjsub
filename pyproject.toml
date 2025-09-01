@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "contsub"
-version = "1.0.4"
+version = "1.0.5"
 description = "Radio astronomy data continuum subtraction tools"
 authors = ["Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo"]
 license = "MIT"
