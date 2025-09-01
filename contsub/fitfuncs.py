@@ -79,7 +79,6 @@ class FitBSpline(FitFunc):
         chwid = (nchan // self.imax) // 8
         knots = lambda: self.rng.integers(-chwid, chwid, size = knotind.shape)+knotind
         
-        
         splCfs = splrep(x, data, task = -1, w = weights, t = x[knots()], k = self.order)
         spl = splev(x, splCfs)
         return spl

@@ -38,7 +38,7 @@ def runit(**kwargs):
         log.warning("Requested --cont-fit-tol is larger than 100 percent. Assuming it is 100.")
         opts.cont_fit_tol = 100
         
-    infits = File(opts.input_image)
+    infits = opts.input_image
     
     if opts.output_prefix:
         prefix = opts.output_prefix
@@ -49,9 +49,6 @@ def runit(**kwargs):
     outline = File(f"{prefix}-line.fits")
     if opts.overwrite is False and (outcont.EXISTS or outline.EXISTS):
         raise RuntimeError("At least one output file exists, but --no-overwrite has been set. Unset it to proceed.")
-    
-    if not infits.EXISTS:
-        raise FileNotFoundError(f"Input FITS image could not be found at: {infits.PATH}")
     
     chunks = dict(ra = opts.ra_chunks or 64, dec=None, spectral=None)
     

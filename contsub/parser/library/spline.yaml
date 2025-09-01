@@ -4,18 +4,11 @@ inputs:
     dtype: List[int]
     policies:
       repeat: "[]"
-    default:
-    - 3
-    - 3
-    - 3
+    default: 3
   segments: 
     info: Width of spline segments in km/s. If given as a list, then it must have same sixe as --order.
     dtype: List[float]
     policies:
       repeat: "[]"
-    default:
-    - 1750
-    - 1675
-    - 1500
 outputs:
   {}

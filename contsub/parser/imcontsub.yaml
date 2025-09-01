@@ -24,10 +24,6 @@ inputs:
     dtype: List[float]
     policies:
       repeat: "[]"
-    default:
-    - 5
-    - 4
-    - 3
   automask-per-iter:
     info: Generate a new mask per iteration.
     dtype: bool
