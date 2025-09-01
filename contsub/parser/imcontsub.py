@@ -38,7 +38,7 @@ def runit(**kwargs):
         log.warning("Requested --cont-fit-tol is larger than 100 percent. Assuming it is 100.")
         opts.cont_fit_tol = 100
         
-    infits = opts.input_image
+    infits = File(opts.input_image)
     
     if opts.output_prefix:
         prefix = opts.output_prefix
@@ -47,13 +47,24 @@ def runit(**kwargs):
     
     outcont = File(f"{prefix}-cont.fits")
     outline = File(f"{prefix}-line.fits")
+    
     if opts.overwrite is False and (outcont.EXISTS or outline.EXISTS):
         raise RuntimeError("At least one output file exists, but --no-overwrite has been set. Unset it to proceed.")
+
+    if opts.segments is None:
+        raise RuntimeError("Required option 'segments' is not set. Please run 'imcontsub --help' for more information.")
+        
+    if len(opts.order) != len(opts.segments):
+        raise ValueError("If setting multiple --order and --segments, they must be of equal length. "
+                    f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
+    niter = len(opts.order)
+
+
     
     chunks = dict(ra = opts.ra_chunks or 64, dec=None, spectral=None)
     
     rest_freq = opts.rest_freq
-    zds = zds_from_fits(infits, chunks=chunks, rest_freq=rest_freq, hdu_idx=opts.hdu_index, add_freqs=True)
+    zds = zds_from_fits(infits.PATH, chunks=chunks, rest_freq=rest_freq, hdu_idx=opts.hdu_index, add_freqs=True)
     base_dims = ["ra", "dec", "spectral", "stokes"]
     if not hasattr(zds, "stokes"):
         base_dims.remove("stokes")
@@ -70,10 +81,6 @@ def runit(**kwargs):
     else:
         cube = zds.DATA
     
-    if len(opts.order) != len(opts.segments):
-        raise ValueError("If setting multiple --order and --segments, they must be of equal length. "
-                    f"Got {len(opts.order)} orders and {len(opts.segments)} segments.")
-    niter = len(opts.order)
     
     nomask = True
     automask = False 
