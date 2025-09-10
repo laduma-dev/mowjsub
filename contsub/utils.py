@@ -1,4 +1,3 @@
-from xarrayfits import xds_from_fits
 import xarray as xr
 from astropy.wcs import WCS
 from contsub.image_plane import ContSub
@@ -15,7 +14,11 @@ import datetime
 from astropy.time import Time
 from daskms import xds_from_ms, xds_from_table
 import dask.array as da
-from dask.diagnostics import ProgressBar
+from tqdm.dask import TqdmCallback
+import warnings
+
+warnings.filterwarnings("ignore", message=".*does not have a Zarr V3 specification.*")
+warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently not part.*")
 
 log = init_logger(BIN.im_plane)
 
@@ -327,7 +330,7 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
         outpath = f'tmp.zarr'
         write_to_zarr = dataset.to_zarr(outpath, mode='w', compute=False)
 
-        with ProgressBar():
-            da.compute(write_to_zarr)
+    with TqdmCallback(desc="Writing to Zarr"):
+        da.compute(write_to_zarr)
 
-        return outpath
+    return outpath

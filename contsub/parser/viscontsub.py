@@ -42,16 +42,20 @@ def runit(**kwargs):
     segments = opts.segments[0]
     method = opts.fit_model
     order = opts.order[0]
-    output_prefix = opts.output
     nworkers = opts.nworkers
     outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
     input_column = opts.input_column
     output_column = opts.output_column
+    zarr_name = opts.load_from_cache
+    cont_tol = opts.cont_fit_tol
 
-    #if load_from_cache := opts.load_from_cache:
-    temp_zarr = ms_to_xarray_dataset(ms,  spwid, fieldid, chunksize, save_to_zarr=True)
-    #TODO(mika): consider caching the MS to a Zarr store
-    temp_zarr = 'tmp.zarr' 
+
+    if opts.load_from_cache:
+        temp_zarr = zarr_name
+    else:
+        temp_zarr = ms_to_xarray_dataset(ms,  spwid, fieldid, chunksize, save_to_zarr=True)
+        temp_zarr = 'tmp.zarr'
+
     ds = xr.open_zarr(temp_zarr, chunks=outchunks)
     
     xspec = ds.coords['FREQ']
@@ -61,7 +65,7 @@ def runit(**kwargs):
     if method == 'spline':
         fitfunc = FitBSpline(order, segments, randomState=None, seq=None)
     elif method == 'polynomial':
-        fitfunc = FitPolynomial(order)
+        fitfunc = FitPolynomial(order, cont_tol)
     else:
         raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline', 'polynomial'.")
     
@@ -111,28 +115,24 @@ def runit(**kwargs):
         group_cols=["FIELD_ID", "DATA_DESC_ID"],
         chunks={"row": chunksize } 
     )
-    
-    #continuum= da.from_array(continuum, chunks={"row": chunksize })
-    
-    
+     
     msds = get_ds_from_msdsl(ms_dsl, spwid, fieldid)
-    
 
-        
-    #import pdb; pdb.set_trace()  
     ms_ds = msds.assign(**{
         output_column: (
             ("row", "chan", "corr"),
             getattr(msds, input_column).data - continuum.data,
             ),
         })
-   
-    
-    #writes = [xds_to_table(msds, ms+".new", [output_column])]
-    #TODO(mika): add functionality to write to a new MS
-    
-    writes = [xds_to_table(ms_ds, ms, [output_column])]
-    print(f"Writing line data to column '{output_column}' in {ms}...")
+
+    if opts.output_ms:
+        ms_name = opts.output_ms
+        writes = [xds_to_table(ms_ds, ms_name, columns=["FLAG", "WEIGHT", output_column])]
+        print(f"Writing new MS with FLAG, WEIGHT, and {output_column}")
+        
+    else:
+        writes = [xds_to_table(ms_ds, ms, [output_column])]
+        print(f"Writing line data to column '{output_column}' in {ms}...")
 
 
     with TqdmCallback(desc="Writing line data to MS"):

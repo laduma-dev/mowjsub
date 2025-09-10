@@ -11,15 +11,17 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.13"
+python = ">=3.10,<3.14"
 numpy = "^1.22.4"
 astropy = "^6.0.0"
 scipy = "^1.12.0"
 xarray-fits = "*"
-xarray = "^2025.7.1"
+xarray = "*"
 stimela = "^2.1.2"
 zarr = "*"
 tdqm = "*"
+dask-ms = "*"
+dask = "<2024.11.0"
 
 
 [tool.poetry.scripts]
@@ -28,6 +30,7 @@ viscontsub = "contsub.parser.viscontsub:runit"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "*"
+matplotlib = "*"
 
 [tool.poetry.group.tests]
 optional = true

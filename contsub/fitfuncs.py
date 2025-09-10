@@ -12,7 +12,7 @@ class FitFunc:
     """
     abstract class for writing fitting functions
     """
-    def __init__(self, order, velwidth):
+    def __init__(self, order, velwidth, cont_tol):
         """
 
         Args:
@@ -22,6 +22,7 @@ class FitFunc:
         self.order = order
         self.velwidth = velwidth
         self.preped = False
+        self.cont_tol = cont_tol
     
     def prepare(self, x):
         nchan = len(x)
@@ -78,14 +79,27 @@ class FitBSpline(FitFunc):
         if not self.preped:
             self.prepare(x)
             
-        nchan = len(x)
-        knotind = np.linspace(0, nchan, self.imax, dtype = int)[1:-1]
-        chwid = (nchan // self.imax) // 8
-        knots = lambda: self.rng.integers(-chwid, chwid, size = knotind.shape)+knotind
-        
-        
-        splCfs = splrep(x, data, task = -1, w = weights, t = x[knots()], k = self.order)
-        spl = splev(x, splCfs)
+        # Mask invalid or zero-weight points
+        mask = (weights > 0) & np.isfinite(x) & np.isfinite(data) & np.isfinite(weights)
+        x_masked = x[mask]
+        data_masked = data[mask]
+        weights_masked = weights[mask]
+    
+    
+        if len(x_masked) < (self.order + 1):
+            print("Not enough valid points for spline fit, returning original data.")
+            return np.copy(data)  # fallback: just return input
+    
+        nchan = len(x_masked)
+        knotind = np.linspace(0, nchan, self.imax, dtype=int)[1:-1]
+        chwid = max(1, (nchan // self.imax) // 8)
+        knots_idx = self.rng.integers(-chwid, chwid, size=knotind.shape) + knotind
+        knots_idx = np.clip(knots_idx, 1, nchan - 20)  # avoid edges
+        knot_positions = np.unique(x_masked[knots_idx])
+    
+        splCfs = splrep(x_masked, data_masked, task=-1,
+                        w=weights_masked, t = knot_positions, k=self.order)
+        spl = splev(x, splCfs) 
         return spl
 
 class FitMedFilter(FitFunc):
@@ -137,12 +151,13 @@ class FitPolynomial(FitFunc):
     """
     Polynomial fitting function using numpy.polyfit
     """
-    def __init__(self, order):
+    def __init__(self, order, cont_tol = 0):
         """
         order (int): Order/degree of the polynomial
         """
         self.order = order
         self.preped = False
+        self.cont_tol = cont_tol
         
     def prepare(self, x):
         """
@@ -153,26 +168,31 @@ class FitPolynomial(FitFunc):
         self.preped = True
     
     def fit(self, x, data, weights=None):
-        """
-        Fit polynomial to data
-        
-        Args:
-            x: x values for the fit
-            data: values to be fit by polynomial
-            mask: boolean mask for valid data points (optional)
-            weights: weights for fitting (optional)
-            
-        Returns:
-            poly_fit: polynomial evaluated at x points
-        """
         if not self.preped:
             self.prepare(x)
-        
+
         if weights is not None:
-            poly_coeffs = np.polyfit(x, data, self.order, w=weights)
+            mask = (weights > 0) & np.isfinite(x) & np.isfinite(data) & np.isfinite(weights)
+            x_masked = x[mask]
+            data_masked = data[mask]
+            weights_masked = weights[mask]
+            
+        
         else:
-            poly_coeffs = np.polyfit(x, data, self.order)
-        
-        poly_fit = np.polyval(poly_coeffs, x)
-        
-        return poly_fit
+            mask = np.isfinite(x) & np.isfinite(data)
+            x_masked = x[mask]
+            data_masked = data[mask]
+            weights_masked = None
+            
+        if (len(x_masked)/len(x))*100 > self.cont_tol:
+           return np.zeros_like(data)
+
+        try:
+            if weights_masked is not None:
+                coeffs = np.polyfit(x_masked, data_masked, self.order, w=weights_masked)
+            else:
+                coeffs = np.polyfit(x_masked, data_masked, self.order)
+            return np.polyval(coeffs, x)
+        except Exception as e:
+            print(f"Polynomial fitting failed: {e}")
+        return np.copy(data)
