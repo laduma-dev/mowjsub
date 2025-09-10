@@ -184,7 +184,7 @@ class FitPolynomial(FitFunc):
             data_masked = data[mask]
             weights_masked = None
             
-        if (len(x_masked)/len(x))*100 > self.cont_tol:
+        if (len(x_masked)/len(x))*100 <= self.cont_tol:
            return np.zeros_like(data)
 
         try:

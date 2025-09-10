@@ -35,7 +35,7 @@ inputs:
         info: Field ID 
         dtype: int
         default: 0
-  row-chunks: #TO-DO: check
+  row-chunks: 
         info: Chunking strategy (Done along the time axis)
         dtype: int
         default: 10000
