@@ -88,7 +88,7 @@ class FitBSpline(FitFunc):
     
         if len(x_masked) < (self.order + 1):
             #TODO(Sphe) maybe return raise an exception, and let the caller of this function decide what to do.
-            print("Not enough valid points for spline fit, returning original data.")
+            log.debug("Not enough valid points for spline fit, returning original data.")
             return np.copy(data)  # fallback: just return input
     
         nchan = len(x_masked)
@@ -142,7 +142,7 @@ class FitMedFilter(FitFunc):
         if not (mask is None):
             data[np.logical_not(mask)] = np.nan
         
-        if self._imax%2 ==0:
+        if self._imax%2 == 0:
             window = self._imax + 1
         else:
             window = self._imax
@@ -181,7 +181,6 @@ class FitPolynomial(FitFunc):
             x_masked = x[mask]
             data_masked = data[mask]
             weights_masked = weights[mask]
-            
         
         else:
             mask = np.isfinite(x) & np.isfinite(data)
@@ -190,6 +189,7 @@ class FitPolynomial(FitFunc):
             weights_masked = None
             
         if (len(x_masked)/len(x))*100 <= self.cont_tol:
+            #TODO(Sphe) Not sure if this is the right thing to do
             return np.zeros_like(data)
 
         try:
@@ -199,5 +199,7 @@ class FitPolynomial(FitFunc):
                 coeffs = np.polyfit(x_masked, data_masked, self.order)
             return np.polyval(coeffs, x)
         except Exception as e:
-            print(f"Polynomial fitting failed: {e}")
-        return np.copy(data)
+            log.debug(f"Polynomial fitting failed: {e}")
+            
+        # TODO(Sphe) Rather raise an exception and let caller of function decide what to do.
+        return data
