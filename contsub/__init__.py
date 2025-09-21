@@ -5,5 +5,5 @@ __version__ = metadata.version(__package__)
 
 BIN = OmegaConf.create({
     "im_plane": "imcontsub",
-    "vis_plane": "imcontsub",
+    "vis_plane": "viscontsub",
 })

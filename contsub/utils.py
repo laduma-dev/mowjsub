@@ -1,4 +1,3 @@
-from xarrayfits import xds_from_fits
 import xarray as xr
 from astropy.wcs import WCS
 from contsub.image_plane import ContSub
@@ -12,6 +11,15 @@ import astropy.io.fits as fitsio
 from scabha.basetypes import File
 import numpy as np
 import datetime
+from astropy.time import Time
+from daskms import xds_from_ms, xds_from_table
+import dask.array as da
+from tqdm.dask import TqdmCallback
+import warnings
+
+warnings.filterwarnings("ignore", message=".*does not have a Zarr V3 specification.*")
+warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently not part.*")
+
 log = init_logger(BIN.im_plane)
 
 
@@ -222,3 +230,115 @@ class FitsHeader():
         self._header['DATE'] = str(datetime.datetime.now()).replace(' ','T')
         self._header['ORIGIN'] = 'A. Kazemi-Moridani (spatial_split)'
         return self._header
+    
+def get_ds_from_msdsl(ms_dsl, field_id=0, data_desc_id=0):
+    found_ds = False
+    for ds in ms_dsl:
+        if ds.FIELD_ID == field_id and ds.DATA_DESC_ID == data_desc_id:
+            found_ds = True
+            break
+    if found_ds:
+        return ds
+    else:
+        raise ValueError("Dataset with FIELD_ID=1 and DATA_DESC_ID=1 not found in the MS.")
+    
+def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
+                          outchunks = {'time': 64, 'baseline': 64}, save_to_zarr=False):
+    
+    """ Creates Zarr store from a input MS. The resulting array has 
+    dimensions = time, basline, SPECTRAL, corr
+
+    Args:
+        ms path (str|path): MS file_
+        spw_id (int): Spectral window ID
+        field_id (int): Field ID
+        chunks (int): How to chunk the data
+        outchunks (dict, optional): xarray chunk object. Defaults to {'time': 64, 'baseline': 64}.
+        save_to_zarr (bool, optional): Save the output to Zarr. Defaults to False.  
+    Returns:
+        Zarr: Zarr array (persistant store, mode=w)
+    """
+    ms_dsl = xds_from_ms(
+        ms_path, 
+        index_cols=["TIME", "ANTENNA1", "ANTENNA2"],
+        group_cols=["FIELD_ID", "DATA_DESC_ID"],
+        chunks={"row": chunks } 
+    )
+    
+
+    spw_table = xds_from_table(f"{ms_path}::SPECTRAL_WINDOW")[0]
+    field_table = xds_from_table(f"{ms_path}::FIELD")[0]
+    antenna_table = xds_from_table(f"{ms_path}::ANTENNA")[0]
+
+    frequencies = spw_table.CHAN_FREQ.data[spw_id] 
+    channel_width = spw_table.CHAN_WIDTH.data[spw_id][0]  
+    ref_frequency = spw_table.REF_FREQUENCY.data[spw_id]
+
+    phase_center = field_table.PHASE_DIR.data[field_id].compute()[0] 
+
+    antenna_names = [name.strip() for name in antenna_table.NAME.data.compute()]
+    ds = get_ds_from_msdsl(ms_dsl, field_id=field_id, data_desc_id=spw_id)
+    
+    times = ds.TIME.data 
+    antenna1 = ds.ANTENNA1.data
+    antenna2 = ds.ANTENNA2.data
+    visibilities = ds.DATA.data
+    flags = ds.FLAG.data
+    weights = ds.WEIGHT_SPECTRUM.data 
+    uvw = ds.UVW.data
+    
+    nant = antenna_table.NAME.size
+    nbl = nant*(nant-1) // 2
+    nrow, nchan, ncorr = ds.DATA.shape
+    ntimes = nrow // nbl
+
+    unique_times = np.unique(times)
+    
+
+
+    reshaped_vis = da.reshape(visibilities, (ntimes, nbl, nchan, ncorr))
+    reshaped_flags = da.reshape(flags, (ntimes, nbl, nchan, ncorr))
+    reshaped_weights = da.reshape(weights, (ntimes, nbl, nchan, ncorr))
+    
+    if ncorr == 2:  
+        corr_labels = ['XX', 'YY'][:ncorr]
+    else:
+        corr_labels = ['XX', 'XY', 'YX', 'YY'][:ncorr]
+
+    dataset = xr.Dataset(
+        {   #TO-DO: reshape the data for all 
+            'VIS': ([ 'time', 'baseline' , 'spectral', 'corr'], reshaped_vis), #time here will be time indicies
+            'FLAG': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_flags),
+            'WEIGHT': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_weights),
+            'UVW': (('time', 'baseline', 'uvw'), uvw.reshape(ntimes, nbl, 3)),
+        },
+        coords={
+            'FREQ': frequencies,  
+            'CORR':corr_labels, 
+            'TIME': unique_times,
+            'BASELINE': np.arange(nbl),
+        },
+        attrs={
+            
+            'ref_freq': float(ref_frequency),
+            'channel_width': float(channel_width),
+            'phase_center_ra': float(phase_center[0]),  # radians
+            'phase_center_dec': float(phase_center[1]),  # radians
+            'phase_center_ra_deg': float(np.degrees(phase_center[0])),  # degrees
+            'phase_center_dec_deg': float(np.degrees(phase_center[1])),  # degrees
+            'antenna_names': antenna_names,
+            'nant': nant,
+            'DATA_DESC_ID': spw_id,
+            'FIELD_ID': field_id
+        })
+    dataset = dataset.chunk(outchunks)
+    if not save_to_zarr:
+        return dataset
+    else:
+        outpath = f'tmp.zarr'
+        write_to_zarr = dataset.to_zarr(outpath, mode='w', compute=False)
+
+    with TqdmCallback(desc="Writing to Zarr"):
+        da.compute(write_to_zarr)
+
+    return outpath

@@ -12,7 +12,7 @@ class FitFunc:
     """
     abstract class for writing fitting functions
     """
-    def __init__(self, order, velwidth):
+    def __init__(self, order, velwidth, cont_tol):
         """
 
         Args:
@@ -22,6 +22,7 @@ class FitFunc:
         self.order = order
         self.velwidth = velwidth
         self.preped = False
+        self.cont_tol = cont_tol
     
     def prepare(self, x):
         nchan = len(x)
@@ -57,7 +58,7 @@ class FitBSpline(FitFunc):
         """
         self.order = order
         self.velwidth = velWidth
-        self.preped = False
+        self.preped = False  
         if randomState and seq:
             rs = np.random.SeedSequence(entropy = randomState, spawn_key = (seq,))
         else:
@@ -74,13 +75,32 @@ class FitBSpline(FitFunc):
         weight : weights for fitting the Spline. 
             To mask values, set the corresponding weight to zero.
         """
-        nchan = len(x)
-        knotind = np.linspace(0, nchan, self.imax, dtype = int)[1:-1]
-        chwid = (nchan // self.imax) // 8
-        knots = lambda: self.rng.integers(-chwid, chwid, size = knotind.shape)+knotind
-        
-        splCfs = splrep(x, data, task = -1, w = weights, t = x[knots()], k = self.order)
-        spl = splev(x, splCfs)
+
+        if not self.preped:
+            self.prepare(x)
+            
+        # Mask invalid or zero-weight points
+        mask = (weights > 0) & np.isfinite(x) & np.isfinite(data) & np.isfinite(weights)
+        x_masked = x[mask]
+        data_masked = data[mask]
+        weights_masked = weights[mask]
+    
+    
+        if len(x_masked) < (self.order + 1):
+            #TODO(Sphe) maybe return raise an exception, and let the caller of this function decide what to do.
+            print("Not enough valid points for spline fit, returning original data.")
+            return np.copy(data)  # fallback: just return input
+    
+        nchan = len(x_masked)
+        knotind = np.linspace(0, nchan, self.imax, dtype=int)[1:-1]
+        chwid = max(1, (nchan // self.imax) // 8)
+        knots_idx = self.rng.integers(-chwid, chwid, size=knotind.shape) + knotind
+        knots_idx = np.clip(knots_idx, 1, nchan - 20)  # avoid edges
+        knot_positions = np.unique(x_masked[knots_idx])
+    
+        splCfs = splrep(x_masked, data_masked, task=-1,
+                        w=weights_masked, t = knot_positions, k=self.order)
+        spl = splev(x, splCfs) 
         return spl
 
 class FitMedFilter(FitFunc):
@@ -93,7 +113,7 @@ class FitMedFilter(FitFunc):
         """
         self._velwid = velWidth
         
-    def prepare(self, x, data = None, mask = None, weight = None):
+    def prepare(self, x):
         msort = np.argpartition(x, -2)
         m1l, m2l = msort[-2:]
         m1h, m2h = msort[:2]
@@ -119,11 +139,65 @@ class FitMedFilter(FitFunc):
         mask : a mask (not implemented really)
         weight : weights
         """
-        cp_data = np.copy(data)
         if not (mask is None):
             data[np.logical_not(mask)] = np.nan
-        nandata = np.hstack((np.full(self._imax//2, np.nan), data, np.full(self._imax//2, np.nan)))
-        nanMed = np.nanmedian(np.lib.stride_tricks.sliding_window_view(nandata,self._imax), axis = 1)
-        # resMed = nanMed[~np.isnan(nanMed)]
-        resMed = nanMed
-        return resMed, cp_data-resMed
+        
+        if self._imax%2 ==0:
+            window = self._imax + 1
+        else:
+            window = self._imax
+        
+        padded_data = np.pad(data, window//2, mode="linear_ramp")
+        filtered = np.nanmedian(np.lib.stride_tricks.sliding_window_view(padded_data, window), axis = 1)
+        
+        return filtered
+
+class FitPolynomial(FitFunc):
+    """
+    Polynomial fitting function using numpy.polyfit
+    """
+    def __init__(self, order, cont_tol = 0):
+        """
+        order (int): Order/degree of the polynomial
+        """
+        self.order = order
+        self.preped = False
+        self.cont_tol = cont_tol
+        
+    def prepare(self, x):
+        """
+        Prepare for polynomial fitting 
+        """
+        nchan = len(x)
+        log.info(f"Polynomial fitting: nchan = {nchan}, order = {self.order}")
+        self.preped = True
+    
+    def fit(self, x, data, weights=None):
+        if not self.preped:
+            self.prepare(x)
+
+        if weights is not None:
+            mask = (weights > 0) & np.isfinite(x) & np.isfinite(data) & np.isfinite(weights)
+            x_masked = x[mask]
+            data_masked = data[mask]
+            weights_masked = weights[mask]
+            
+        
+        else:
+            mask = np.isfinite(x) & np.isfinite(data)
+            x_masked = x[mask]
+            data_masked = data[mask]
+            weights_masked = None
+            
+        if (len(x_masked)/len(x))*100 <= self.cont_tol:
+            return np.zeros_like(data)
+
+        try:
+            if weights_masked is not None:
+                coeffs = np.polyfit(x_masked, data_masked, self.order, w=weights_masked)
+            else:
+                coeffs = np.polyfit(x_masked, data_masked, self.order)
+            return np.polyval(coeffs, x)
+        except Exception as e:
+            print(f"Polynomial fitting failed: {e}")
+        return np.copy(data)
