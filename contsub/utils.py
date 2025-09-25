@@ -11,8 +11,8 @@ import astropy.io.fits as fitsio
 from scabha.basetypes import File
 import numpy as np
 import datetime
-from astropy.time import Time
 from daskms import xds_from_ms, xds_from_table
+from xarrayfits import xds_from_fits
 import dask.array as da
 from tqdm.dask import TqdmCallback
 import warnings
@@ -23,25 +23,21 @@ warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently 
 log = init_logger(BIN.im_plane)
 
 
-def get_automask(xspec, cube, sigma_clip=5, order=3, segments=400):
+def get_automask(xspec, cube, fitfunc, sigma_clip):
     """
     Generate a binary mask by sigma-thresholding the input cube
 
     Args:
         xspec (Array): Spectral coordinates
         cube (Array): Data cdube
-        sigma_clip (int, optional): _description_. Defaults to 5.
-        order (int, optional): _description_. Defaults to 3.
-        segments (int, optional): Length of spline segment in km/s. Defaults to 400.
+        sigma_clip(float): Sigma clip level
 
     Returns:
         Array : Binary mask (False is masked, True is not)
     """
 
     log.info("Creating binary mask as requested")
-    fitfunc = FitBSpline(order, segments)
-    contsub = ContSub(fitfunc, nomask=True, fit_tol=60)
-    cont_model = contsub.fitContinuum(xspec, cube, mask=None)
+    cont_model = fitfunc.fitContinuum(xspec, cube, mask=None)
     
     clip = PixSigmaClip(sigma_clip)
         
