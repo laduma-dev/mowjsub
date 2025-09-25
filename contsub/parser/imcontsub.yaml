@@ -24,24 +24,23 @@ inputs:
     dtype: bool
     default: False
   fit-model:
-    info: "### NOT IMPLEMENTED ### Fit function to model the continuum."
+    info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
     dtype: str
     choices:
       - spline
       - polynomial
       - median-filter
+      - dct
     default: spline
   order:
-    info: Order of spline/polynomial. If given as a list of size N, then N iterations will be perfomed.
-    dtype: List[int]
-    policies:
-      repeat: "[]"
-    default: 3
-  segments: 
+    info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
+    dtype: int
+  vel-width: 
     info: Width of spline segments or median filter window in km/s. If given as a list, then it must have same sixe as --order.
-    dtype: List[float]
-    policies:
-      repeat: "[]"
+    dtype: float
+  segments: 
+    info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same sixe as --order."
+    dtype: float
   cont-fit-tol:
     info: "Minimum perentage of valid spectrum data points required to do a fit.
           Spectra below this tolerance will be set to NaN.
