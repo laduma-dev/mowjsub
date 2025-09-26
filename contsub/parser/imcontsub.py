@@ -12,7 +12,7 @@ from contsub.fitfuncs import (
     FitBSpline,
     FitPolynomial,
     FitMedFilter,
-    FitDCT,
+    FitGCVSpline,
 )
 import astropy.io.fits as fitsio
 from contsub.utils import zds_from_fits, get_automask, subtract_fits
@@ -104,14 +104,18 @@ def runit(**kwargs):
     dblocks = cube.data.blocks
     futures = []
     
-    if opts.fit_model == "spline":
-        fitfunc = FitBSpline(xspec, opts.order, velwidth, fit_tol=opts.cont_fit_tol)
+    if opts.fit_model in ["spline", "b-spline"]:
+        fitfunc = FitBSpline(xspec, order=opts.order, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
+        fitfunc.prepare()
     elif opts.fit_model == "polynomial":
-        fitfunc = FitPolynomial(xspec, opts.order, fit_tol=opts.cont_fit_tol)
+        fitfunc = FitPolynomial(xspec, order=opts.order, fit_tol=opts.cont_fit_tol)
+        fitfunc.prepare()
     elif opts.fit_model == "median-filter":
-        fitfunc = FitMedFilter(xspec, velwidth, fit_tol=opts.cont_fit_tol)
-    elif opts.fit_model == "dct":
-        fitfunc = FitDCT(xspec, velwidth, opts.order, fit_tol=opts.cont_fit_tol)
+        fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
+        fitfunc.prepare()
+    elif opts.fit_model == "gcv-spline":
+        fitfunc = FitGCVSpline(xspec, fit_tol=opts.cont_fit_tol)
+        fitfunc.prepare(lam=opts.gcv_lambda)
         
     for biter,dblock in enumerate(dblocks):
         if opts.sigma_clip:

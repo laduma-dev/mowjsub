@@ -27,16 +27,20 @@ inputs:
     info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
     dtype: str
     choices:
+      - b-spline
       - spline
       - polynomial
       - median-filter
-      - dct
-    default: spline
+      - gcv-spline
+    default: b-spline
   order:
     info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
     dtype: int
   vel-width: 
     info: Width of spline segments or median filter window in km/s. If given as a list, then it must have same sixe as --order.
+    dtype: float
+  gcv-lambda:
+    info: GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset (recommended) the parameter will be estimated using the GCV criterion. 
     dtype: float
   segments: 
     info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same sixe as --order."

@@ -63,8 +63,7 @@ class ContSub():
                     mask_ij = mask[slc]
                 
                 try:
-                    cont_model[slc] = fitfunc.fit(cube_ij, 
-                                                mask_ij, weights=None)
+                    cont_model[slc] = fitfunc.fit(cube_ij, mask_ij, weights=None)
                 except BadFitError:
                     # Flag LOS and continue if too many pixels are flagged
                     cont_model[slc] = np.full_like(cube_ij, np.nan)

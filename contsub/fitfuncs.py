@@ -1,21 +1,20 @@
 from scipy.interpolate import splev, splrep
-import sys
 from scabha import init_logger
 from abc import abstractmethod
 from . import BIN
 from .exceptions import BadFitError
 import numpy as np
 from scipy import fftpack
+from contsub import utils
+from scipy.interpolate import make_smoothing_spline, make_splrep
 
 log = init_logger(BIN.im_plane)
 
 class FitFunc:
-    """
-    abstract class for writing fitting functions
-    """
-    def __init__(self, freqs, velwidth:float, fit_tol:float=0):
+    def __init__(self, freqs, order:int=None, velwidth:float=None,
+                chanwidth:int=None, fit_tol:float=0):
         """
-
+        
         Args:
             order (_type_): _description_
             velwidth (_type_): _description_
@@ -24,24 +23,9 @@ class FitFunc:
         self.fit_tol = fit_tol
         self.freqs = freqs
         self.nchan = freqs.size
-
-    def prepare(self):
-        freqs = self.freqs
-        msort = np.argpartition(freqs, -2)
-        m1l, m2l = msort[-2:]
-        m1h, m2h = msort[:2]
-        if np.abs(m1l - m2l) == 1 and np.abs(m1h - m2h) == 1:
-            dvl = np.abs(freqs[m1l]-freqs[m2l])/np.mean([freqs[m1l],freqs[m2l]])*3e5
-            dvh = np.abs(freqs[m1h]-freqs[m2h])/np.mean([freqs[m1h],freqs[m2h]])*2.998e5
-            dv = (dvl+dvh)/2
-            self.imax = int(self.velwidth/dv)
-            if self.imax %2 == 0:
-                self.imax += 1
-            log.info(f"nchan = {self.nchan}, dv = {dv}, {self.velwidth}km/s in chans: {self.imax}")
-        else:
-            log.error('probably x values are not changing monotonically, aborting')
-            sys.exit(1)
-        self.preped = True
+        self.order = order
+        self.preped = False
+        self.chanwidth = chanwidth
 
     def invalid_point_count(self, data:np.ndarray, mask:np.ndarray):
         """ Calculates the number of invalid data points in a spectrum.
@@ -50,10 +34,9 @@ class FitFunc:
             data (np.ndarray): 1D spectrum
             mask (np.ndarray): Binary mask
         """
-        data_count = np.isnan(data).sum()
-        mask_count = mask.sum()
+        mask[np.isnan(data)] = True
         
-        return data_count + mask_count
+        return mask, mask.sum()
     
     def is_fit_possible(self, data: np.ndarray, mask: np.ndarray, raise_exception=True):
         """_summary_
@@ -62,7 +45,7 @@ class FitFunc:
             data (np.ndarray): _description_
             mask (np.ndarray): _description_
         """
-        invalid = self.invalid_point_count(data, mask)
+        mask, invalid = self.invalid_point_count(data, mask)
         nchan = data.size
         valid_fraction = (1 - invalid / nchan) * 100
         if valid_fraction < self.fit_tol:
@@ -71,36 +54,37 @@ class FitFunc:
             else:
                 return False
         else:
-            return True
+            return mask, invalid
     
     @abstractmethod
     def fit(self, x, data, mask, weight):
         pass
+
+    def default_prepare(self):
+        if self.velwidth:
+            self.chanwidth = utils.chans_in_velwidth(self.freqs*1e6, self.velwidth*1000)
+        elif self.chanwidth is None:
+            raise RuntimeError("Neither chanwidth or velwitdth are set. Cannot proceed.")
+        
+        if self.chanwidth % 2 == 0:
+            self.chanwidth += 1
+        
+        self.preped = True
     
 class FitBSpline(FitFunc):
     """
     BSpline fitting function based on `splev`, `splrep` in `scipy.interpolate` 
     """
-    def __init__(self, freqs, order, velwidth, fit_tol=0, randomState=None, seq=None):
-        """
-        needs to know the order of the spline and the number of knots
-        """
-        self.order = order
-        self.velwidth = velwidth
-        self.fit_tol = fit_tol
-        self.freqs = freqs
-        self.nchan = freqs.size
-        self.prepare() 
-        self.max_spline_order = int(self.nchan / self.imax) + 1
+    def prepare(self):
+        self.default_prepare()
+        
+        self.max_spline_order = int(self.nchan / self.chanwidth) + 1
         log.info(f"max spline order: {self.max_spline_order}")
-
-        if randomState and seq:
-            rs = np.random.SeedSequence(entropy = randomState, spawn_key = (seq,))
-        else:
-            rs = np.random.SeedSequence()
+        
+        rs = np.random.SeedSequence()
         self.rng = np.random.default_rng(rs)
-        
-        
+        self.preped = True
+
     def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
         """
         returns the spline fit and the residuals from the fit
@@ -111,8 +95,11 @@ class FitBSpline(FitFunc):
             To mask values, set the corresponding weight to zero.
         """
 
-        self.is_fit_possible(data, mask, raise_exception=True)
-        nvalid = self.nchan - self.invalid_point_count(data, mask)
+        if not self.preped:
+            self.prepare()
+            
+        mask, invalid = self.is_fit_possible(data, mask, raise_exception=True)
+        nvalid = self.nchan - invalid
         
         if nvalid < (self.order + 1):
             raise BadFitError("Not enough valid points for spline fit, returning original data.")
@@ -138,61 +125,14 @@ class FitBSpline(FitFunc):
 
         return  splev(self.freqs, splCfs)
 
-
-class FitMedFilter(FitFunc):
+class FitGCVSpline(FitFunc):
     """
-    Median filtering class for continuum subtraction 
+    Polynomial fitting function using scipy.interpolate.make_smoothing_spline
     """
-    def __init__(self, freqs, velwidth, fit_tol=0):
-        """
-        needs to know the order of the spline and the number of knots
-        """
-        self.velwidth = velwidth
-        self.fit_tol = fit_tol
-        self.freqs = freqs
-        self.nchan = freqs.size
-        self.prepare()
     
-            
-    def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
-        """
-        returns the median filtered data as line emission
-        
-        data (np.ndarray) : values to be fit
-        mask (np.ndarray) : a mask (not implemented really)
-        weight (np.ndarray) : weights
-        """
-        self.is_fit_possible(data, mask, raise_exception=True)
-        
-        if isinstance(mask, np.ndarray):
-            data[mask] = np.nan
-        
-        padded_data = np.pad(data, self.imax//2, mode="linear_ramp")
-        filtered = np.nanmedian(np.lib.stride_tricks.sliding_window_view(padded_data, self.imax), axis = 1)
-        
-        return filtered
-
-class FitPolynomial(FitFunc):
-    """
-    Polynomial fitting function using numpy.polyfit
-    """
-    def __init__(self, freqs, order, fit_tol=0):
-        """
-        order (int): Order/degree of the polynomial
-        """
-        self.order = order
-        self.fit_tol = fit_tol
-        self.freqs = freqs
-        self.nchan = freqs.size
-        self.prepare()
-        
-    def prepare(self):
-        """
-        Prepare for polynomial fitting 
-        """
-        
-        log.info(f"Polynomial fitting: nchan = {self.nchan}, order = {self.order}")
-        self.preped = True 
+    def prepare(self, lam=None):
+        self.lam = lam
+        self.preped = True
     
     def fit(self, data: np.ndarray, mask:np.ndarray, weights: np.ndarray):
         """_summary_
@@ -207,8 +147,83 @@ class FitPolynomial(FitFunc):
             _type_: _description_
         """
         
-        self.is_fit_possible(data, mask, raise_exception=True)
+        if not self.preped:
+            self.prepare()
+        mask, invalid = self.is_fit_possible(data, mask, raise_exception=True)
+        nvalid = self.nchan - invalid
         
+        x_masked = self.freqs[~mask]
+        data_masked = data[~mask]
+            
+        try:
+            if isinstance(weights, np.ndarray):
+                smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.lam, w=weights[~mask])
+            else:
+                smooth_func = make_splrep(x_masked, data_masked, s=nvalid) #, lam=self.lam)
+        except Exception as e:
+            raise BadFitError(f"Polynomial fitting failed: {e}")
+
+        return smooth_func(self.freqs)
+class FitMedFilter(FitFunc):
+    """
+    Median filtering class for continuum subtraction 
+    """
+    
+    def prepare(self):
+        self.default_prepare()
+        
+    def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
+        """
+        returns the median filtered data as line emission
+        
+        data (np.ndarray) : values to be fit
+        mask (np.ndarray) : a mask (not implemented really)
+        weight (np.ndarray) : weights
+        """
+        
+        if not self.preped:
+            self.prepare()
+            
+        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
+
+        if isinstance(weights, np.ndarray):
+            #TODO(Sphe)
+            pass
+        
+        if isinstance(mask, np.ndarray):
+            data[mask] = np.nan
+            
+        pad_size = int(self.chanwidth/2)
+        padded_data = np.pad(data, pad_size, mode="linear_ramp")
+        filtered = np.nanmedian(np.lib.stride_tricks.sliding_window_view(padded_data, self.chanwidth), axis = 1)
+        
+        return filtered
+
+class FitPolynomial(FitFunc):
+    """
+    Polynomial fitting function using numpy.polyfit
+    """
+    
+    def prepare(self):
+        pass
+    
+    def fit(self, data: np.ndarray, mask:np.ndarray, weights: np.ndarray):
+        """_summary_
+
+        Args:
+            x (np.ndarray): _description_
+            data (np.ndarray): _description_
+            weights (np.ndarray): _description_
+            mask (np.ndarray): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        
+        if not self.preped:
+            self.prepare()
+            
+        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
         
         x_masked = self.freqs[~mask]
         data_masked = data[~mask]
@@ -221,24 +236,15 @@ class FitPolynomial(FitFunc):
             return np.polyval(coeffs, self.freqs)
         
         except Exception as e:
-            log.error(f"Polynomial fitting failed: {e}")
-            sys.exit(1)
+            raise BadFitError(f"Polynomial fitting failed: {e}")
             
 class FitDCT(FitFunc):
     """
     Median filtering class for continuum subtraction 
     """
-    def __init__(self, freqs, velwidth, ncoef, dct_type=1, fit_tol=0):
-        """
-        needs to know the order of the spline and the number of knots
-        """
-        self.velwidth = velwidth
-        self.fit_tol = fit_tol
-        self.preped = False
-        self.dct_type = dct_type
-        self.ncoef = ncoef
-        self.freqs = freqs
-        self.nchan = freqs.size
+    def prepare(self, dct_type=1):
+        
+        self.default_prepare()
         
         fnorm_dict = {
         1: 1 / np.sqrt( 2 * self.nchan),
@@ -248,9 +254,7 @@ class FitDCT(FitFunc):
         }
         
         self.fnorm = fnorm_dict[dct_type]
-        print(self.fnorm)
-        
-        self.prepare()
+        self.preped = True
             
     def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
         """
@@ -261,16 +265,22 @@ class FitDCT(FitFunc):
         mask : a mask (not implemented really)
         weight : weights
         """
-        baseline = FitMedFilter(self.freqs, self.velwidth)
+
+        if not self.preped:
+            self.prepare()
+            
+        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
         
+        if isinstance(weights, np.ndarray):
+            #TODO(Sphe)
+            pass
+        
+        baseline = FitMedFilter(self.freqs, velwidth=self.velwidth, chanwidth=self.chanwidth)
         baseline_median = baseline.fit(data, mask=mask, weights=None)
         
-        
         dct_data = fftpack.dct(baseline_median, type=self.dct_type)
-        sort_idx = np.argsort(np.absolute(dct_data))[:-self.ncoef]
+        sort_idx = np.argsort(np.absolute(dct_data))[:-self.order]
         dct_data[sort_idx] = 0
-        
         dct_fit = fftpack.idct(dct_data, type=self.dct_type) * self.fnorm**2
         
         return dct_fit
-

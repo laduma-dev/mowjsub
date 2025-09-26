@@ -1,12 +1,10 @@
 import xarray as xr
 from astropy.wcs import WCS
-from contsub.image_plane import ContSub
 from contsub.masking import PixSigmaClip, Mask
-from contsub.fitfuncs import FitBSpline
 from contsub import BIN
 from typing import Dict
 from scabha import init_logger
-import astropy.units as u
+from astropy import units
 import astropy.io.fits as fitsio
 from scabha.basetypes import File
 import numpy as np
@@ -46,6 +44,34 @@ def get_automask(xspec, cube, fitfunc, sigma_clip):
     
     return mask
 
+def chans_in_velwidth(freqs:np.ndarray, velwidth:float):
+    """
+    Calculates the number of channels in given velocity width
+
+    Args:
+        freqs (np.ndarray): Frequency grid in Hz.
+        velwidth (float): Velocity width in m/s
+    """
+    speed_c = 2.998e8
+    df_low = np.partition(freqs, 2)[:2]
+    df_high = np.partition(freqs, 2)[-2:]
+    
+    dv_high = np.diff(df_low) / np.mean(df_low) * speed_c
+    dv_low = np.diff(df_high) / np.mean(df_high) * speed_c
+    dv = np.mean([dv_low, dv_high])
+    
+    return int(velwidth / dv)
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
 
 def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):
     """ Creates Zarr store from a FITS file. The resulting array has 
@@ -157,7 +183,7 @@ class FitsHeader():
             wcsfreq = wcs3d.spectral
         except:
             wcsfreq = wcs3d.sub(['spectral'])   
-        return np.around(wcsfreq.pixel_to_world(np.arange(0,freqDim)).to(u.MHz).value, decimals = 7)
+        return np.around(wcsfreq.pixel_to_world(np.arange(0,freqDim)).to(units.MHz).value, decimals = 7)
         
     def getAppendHeader(self, nchan):
         return self.spectralSplitHeader(nchan, orig = 'append_fits')
