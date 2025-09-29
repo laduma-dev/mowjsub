@@ -10,20 +10,12 @@ class ContSub():
     """
     a class for performing continuum subtraction on data
     """
-    def __init__(self, fit_func, nomask):
+    def __init__(self, fit_func):
         """
         each object can be initiliazed by passing a data cube, a fitting function, and a mask
         Args:
             fit_func (Callable) : a fitting function should be built on FitFunc class
-            nomask (bool): Ignore mask if set
-            fit_tol (float): If set, will skip lines with more than this percentage of masked pixels.
-                            Default is 0, which means no skipping.
-                            f set to 100, will skip all lines with any masked pixels.
-                            If set to 0, will not skip any lines.
-        Returns:
-            None
         """
-        self.nomask = nomask
         self.fit_func = fit_func
         
         
@@ -71,6 +63,6 @@ class ContSub():
         
         if skipped_lines > 0:
             log.info(f"This worker set {skipped_lines} spectra to NaN because of --cont-fit-tol.")
-            
+        
         return cont_model
     

@@ -89,12 +89,6 @@ def runit(**kwargs):
         mask = zds_from_fits(opts.mask_image, chunks=chunks, rest_freq=rest_freq).DATA
         nomask = False
     
-    get_mask = da.gufunc(
-        get_automask,
-        signature=f"(spectral),({dims_string}) -> ({dims_string})",
-        meta=(np.ndarray((), cube.dtype),),
-        allow_rechunk=True,
-    )
 
     signature = f"({dims_string}),({dims_string}) -> ({dims_string})"
     meta = (np.ndarray((), cube.dtype),)
@@ -117,9 +111,16 @@ def runit(**kwargs):
         fitfunc = FitGCVSpline(xspec, fit_tol=opts.cont_fit_tol)
         fitfunc.prepare(lam=opts.gcv_lambda)
         
+    get_mask = da.gufunc(
+        lambda _data: get_automask(_data, fitfunc, opts.sigma_clip),
+        signature=f"({dims_string}) -> ({dims_string})",
+        meta=(np.ndarray((), cube.dtype),),
+        allow_rechunk=True,
+    )
+        
     for biter,dblock in enumerate(dblocks):
         if opts.sigma_clip:
-            mask_future = get_mask(dblock, fitfunc, sigma_clip=opts.sigma_clip)
+            mask_future = get_mask(dblock)
         elif nomask is False:
             mask_future = mask.data.blocks[biter]
         else:
@@ -139,8 +140,6 @@ def runit(**kwargs):
             mask_future,
         ))
         
-    dblocks = list(futures)
-    
     continuum = da.concatenate(futures).transpose((2,1,0))
     if has_stokes:
         continuum = continuum[np.newaxis,...]

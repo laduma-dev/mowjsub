@@ -1,4 +1,5 @@
-from scipy.interpolate import splev, splrep
+from scipy.interpolate import splev, splrep, make_smoothing_spline
+from scipy.ndimage import median_filter
 from scabha import init_logger
 from abc import abstractmethod
 from . import BIN
@@ -6,13 +7,12 @@ from .exceptions import BadFitError
 import numpy as np
 from scipy import fftpack
 from contsub import utils
-from scipy.interpolate import make_smoothing_spline, make_splrep
 
 log = init_logger(BIN.im_plane)
 
 class FitFunc:
     def __init__(self, freqs, order:int=None, velwidth:float=None,
-                chanwidth:int=None, fit_tol:float=0):
+                chanwidth:int=None, fit_lam:int=None, fit_tol:float=0):
         """
         
         Args:
@@ -26,6 +26,7 @@ class FitFunc:
         self.order = order
         self.preped = False
         self.chanwidth = chanwidth
+        self.fit_lam = fit_lam
 
     def invalid_point_count(self, data:np.ndarray, mask:np.ndarray):
         """ Calculates the number of invalid data points in a spectrum.
@@ -63,6 +64,7 @@ class FitFunc:
     def default_prepare(self):
         if self.velwidth:
             self.chanwidth = utils.chans_in_velwidth(self.freqs*1e6, self.velwidth*1000)
+            log.info(f"Velocity of {self.velwidth} km/s corresponds to {self.chanwidth} channels")
         elif self.chanwidth is None:
             raise RuntimeError("Neither chanwidth or velwitdth are set. Cannot proceed.")
         
@@ -116,6 +118,7 @@ class FitBSpline(FitFunc):
         
         knot_positions = x_masked[knots_idx]
         
+        
         if isinstance(weights, np.ndarray):
             splCfs = splrep(x_masked, data_masked, task=-1,
                             w=weights[~mask], t = knot_positions, k=self.order)
@@ -130,8 +133,7 @@ class FitGCVSpline(FitFunc):
     Polynomial fitting function using scipy.interpolate.make_smoothing_spline
     """
     
-    def prepare(self, lam=None):
-        self.lam = lam
+    def prepare(self):
         self.preped = True
     
     def fit(self, data: np.ndarray, mask:np.ndarray, weights: np.ndarray):
@@ -149,17 +151,16 @@ class FitGCVSpline(FitFunc):
         
         if not self.preped:
             self.prepare()
-        mask, invalid = self.is_fit_possible(data, mask, raise_exception=True)
-        nvalid = self.nchan - invalid
+        mask, _ = self.is_fit_possible(data, mask, raise_exception=True)
         
         x_masked = self.freqs[~mask]
         data_masked = data[~mask]
             
         try:
             if isinstance(weights, np.ndarray):
-                smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.lam, w=weights[~mask])
+                smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.fit_lam, w=weights[~mask])
             else:
-                smooth_func = make_splrep(x_masked, data_masked, s=nvalid) #, lam=self.lam)
+                smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.fit_lam)
         except Exception as e:
             raise BadFitError(f"Polynomial fitting failed: {e}")
 
@@ -184,7 +185,7 @@ class FitMedFilter(FitFunc):
         if not self.preped:
             self.prepare()
             
-        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
+        mask, _ = self.is_fit_possible(data, mask, raise_exception=True)
 
         if isinstance(weights, np.ndarray):
             #TODO(Sphe)
@@ -197,6 +198,44 @@ class FitMedFilter(FitFunc):
         padded_data = np.pad(data, pad_size, mode="linear_ramp")
         filtered = np.nanmedian(np.lib.stride_tricks.sliding_window_view(padded_data, self.chanwidth), axis = 1)
         
+        return filtered
+    
+class FitMedFilterFast(FitFunc):
+    """
+    Median filtering class for continuum subtraction 
+    """
+    
+    def prepare(self):
+        self.default_prepare()
+        
+    def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
+        """
+        returns the median filtered data as line emission
+        
+        data (np.ndarray) : values to be fit
+        mask (np.ndarray) : a mask (not implemented really)
+        weight (np.ndarray) : weights
+        """
+        
+        if not self.preped:
+            self.prepare()
+            
+        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
+
+        if isinstance(mask, np.ndarray):
+            data[mask] = np.nan
+
+        # Fill NaNs with nearest value for filtering
+        nan_mask = np.isnan(data)
+        if np.any(nan_mask):
+            data_filled = np.copy(data)
+            data_filled[nan_mask] = np.interp(np.flatnonzero(nan_mask), np.flatnonzero(~nan_mask), data[~nan_mask])
+        else:
+            data_filled = data
+
+        # Use scipy.ndimage.median_filter for speed
+        filtered = median_filter(data_filled, size=self.chanwidth, mode='reflect')
+
         return filtered
 
 class FitPolynomial(FitFunc):
@@ -223,7 +262,7 @@ class FitPolynomial(FitFunc):
         if not self.preped:
             self.prepare()
             
-        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
+        mask, _ = self.is_fit_possible(data, mask, raise_exception=True)
         
         x_masked = self.freqs[~mask]
         data_masked = data[~mask]
@@ -254,6 +293,7 @@ class FitDCT(FitFunc):
         }
         
         self.fnorm = fnorm_dict[dct_type]
+        self.dct_type = dct_type
         self.preped = True
             
     def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
@@ -269,13 +309,13 @@ class FitDCT(FitFunc):
         if not self.preped:
             self.prepare()
             
-        mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
+        mask, _ = self.is_fit_possible(data, mask, raise_exception=True)
         
         if isinstance(weights, np.ndarray):
             #TODO(Sphe)
             pass
         
-        baseline = FitMedFilter(self.freqs, velwidth=self.velwidth, chanwidth=self.chanwidth)
+        baseline = FitMedFilterFast(self.freqs, velwidth=self.velwidth, chanwidth=self.chanwidth)
         baseline_median = baseline.fit(data, mask=mask, weights=None)
         
         dct_data = fftpack.dct(baseline_median, type=self.dct_type)

@@ -1,6 +1,7 @@
 import xarray as xr
 from astropy.wcs import WCS
 from contsub.masking import PixSigmaClip, Mask
+from contsub.image_plane import ContSub
 from contsub import BIN
 from typing import Dict
 from scabha import init_logger
@@ -21,7 +22,7 @@ warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently 
 log = init_logger(BIN.im_plane)
 
 
-def get_automask(xspec, cube, fitfunc, sigma_clip):
+def get_automask(cube, fitfunc, sigma_clip):
     """
     Generate a binary mask by sigma-thresholding the input cube
 
@@ -35,14 +36,15 @@ def get_automask(xspec, cube, fitfunc, sigma_clip):
     """
 
     log.info("Creating binary mask as requested")
-    cont_model = fitfunc.fitContinuum(xspec, cube, mask=None)
+    contsub = ContSub(fitfunc)
+    cont_model = contsub.fitContinuum(cube, mask=None)
     
     clip = PixSigmaClip(sigma_clip)
         
     mask = Mask(clip).getMask(cube - cont_model)
     log.info("Mask created sucessfully")
     
-    return mask
+    return ~mask
 
 def chans_in_velwidth(freqs:np.ndarray, velwidth:float):
     """
@@ -56,22 +58,12 @@ def chans_in_velwidth(freqs:np.ndarray, velwidth:float):
     df_low = np.partition(freqs, 2)[:2]
     df_high = np.partition(freqs, 2)[-2:]
     
-    dv_high = np.diff(df_low) / np.mean(df_low) * speed_c
-    dv_low = np.diff(df_high) / np.mean(df_high) * speed_c
+    dv_high = np.abs(np.diff(df_low) / np.mean(df_low)) * speed_c
+    dv_low = np.abs(np.diff(df_high) / np.mean(df_high)) * speed_c
     dv = np.mean([dv_low, dv_high])
     
     return int(velwidth / dv)
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
 
 def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):
     """ Creates Zarr store from a FITS file. The resulting array has 
@@ -208,7 +200,6 @@ class FitsHeader():
         self._header['ORIGIN'] = 'A. Kazemi-Moridani (combine_spatial)'
         return self._header
     
-    
     def getPrimeHeader(self, nchan, ydim, xdim, mask = False, orig = 'prime_header'):
         self._header['NAXIS1'] = int(xdim)
         self._header['NAXIS2'] = int(ydim)
@@ -265,7 +256,7 @@ def get_ds_from_msdsl(ms_dsl, field_id=0, data_desc_id=0):
         raise ValueError("Dataset with FIELD_ID=1 and DATA_DESC_ID=1 not found in the MS.")
     
 def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
-                          outchunks = {'time': 64, 'baseline': 64}, save_to_zarr=False):
+                        outchunks = {'time': 64, 'baseline': 64}, save_to_zarr=False):
     
     """ Creates Zarr store from a input MS. The resulting array has 
     dimensions = time, basline, SPECTRAL, corr
@@ -287,7 +278,6 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
         chunks={"row": chunks } 
     )
     
-
     spw_table = xds_from_table(f"{ms_path}::SPECTRAL_WINDOW")[0]
     field_table = xds_from_table(f"{ms_path}::FIELD")[0]
     antenna_table = xds_from_table(f"{ms_path}::ANTENNA")[0]
@@ -302,8 +292,6 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
     ds = get_ds_from_msdsl(ms_dsl, field_id=field_id, data_desc_id=spw_id)
     
     times = ds.TIME.data 
-    antenna1 = ds.ANTENNA1.data
-    antenna2 = ds.ANTENNA2.data
     visibilities = ds.DATA.data
     flags = ds.FLAG.data
     weights = ds.WEIGHT_SPECTRUM.data 
@@ -315,8 +303,6 @@ def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
     ntimes = nrow // nbl
 
     unique_times = np.unique(times)
-    
-
 
     reshaped_vis = da.reshape(visibilities, (ntimes, nbl, nchan, ncorr))
     reshaped_flags = da.reshape(flags, (ntimes, nbl, nchan, ncorr))
