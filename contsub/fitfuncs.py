@@ -93,23 +93,6 @@ class FitMedFilter(FitFunc):
         needs to know the order of the spline and the number of knots
         """
         self._velwid = velWidth
-        
-    def prepare(self, x, data = None, mask = None, weight = None):
-        msort = np.argpartition(x, -2)
-        m1l, m2l = msort[-2:]
-        m1h, m2h = msort[:2]
-        if np.abs(m1l - m2l) == 1 and np.abs(m1h - m2h) == 1:
-            dvl = np.abs(x[m1l]-x[m2l])/np.mean([x[m1l],x[m2l]])*3e5
-            dvh = np.abs(x[m1h]-x[m2h])/np.mean([x[m1h],x[m2h]])*3e5
-            dv = (dvl+dvh)/2
-            self._imax = int(self._velwid//dv)
-            if self._imax %2 == 0:
-                self._imax += 1
-            log.info('len(x) = {}, dv = {}, {}km/s in chans: {}'.format(len(x), dv, self._velwid, self._velwid//dv))
-        else:
-            log.debug('probably x values are not changing monotonically, aborting')
-            sys.exit(1)
-            
     
     def fit(self, x, data, mask, weight):
         """
@@ -120,11 +103,10 @@ class FitMedFilter(FitFunc):
         mask : a mask (not implemented really)
         weight : weights
         """
-        cp_data = np.copy(data)
         if not (mask is None):
             data[np.logical_not(mask)] = np.nan
         nandata = np.hstack((np.full(self._imax//2, np.nan), data, np.full(self._imax//2, np.nan)))
-        nanMed = np.nanmedian(np.lib.stride_tricks.sliding_window_view(nandata,self._imax), axis = 1)
+        filtered = np.nanmedian(np.lib.stride_tricks.sliding_window_view(nandata,self._imax), axis = 1)
         # resMed = nanMed[~np.isnan(nanMed)]
-        resMed = nanMed
-        return resMed, cp_data-resMed
+        
+        return filtered

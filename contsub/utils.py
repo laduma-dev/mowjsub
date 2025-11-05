@@ -141,7 +141,7 @@ def xds_from_fits2(fname, chunks=None):
         coords = coords,
         attrs = dict(
             info =f"Temporary copy of data from FITS file: {fname}",
-            header = fits.Header(header),
+            header = header,
                     ),
     )
 
