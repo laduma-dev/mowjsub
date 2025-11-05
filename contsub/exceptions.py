@@ -15,3 +15,6 @@ class tableDimMismatch(Exception):
 
 class CubeDimIsSmall(Exception):
     pass
+
+class BadFitError(Exception):
+    pass

@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "contsub"
-version = "1.0.2"
+version = "2.0rc1"
 description = "Radio astronomy data continuum subtraction tools"
-authors = ["Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo"]
+authors = ["Sphesihle Makhathini, Mika Naidoo", "Amir Kazemi-Moridani"]
 license = "MIT"
 readme = "README.rst"
 
@@ -11,17 +11,22 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.13"
-numpy = "^1.22.4"
-astropy = "^6.0.0"
-scipy = "^1.12.0"
+python = ">=3.10,<3.14"
+numpy = "*"
+astropy = "*"
+scipy = "*"
 xarray-fits = "*"
-zarr = "*"
+xarray = "*"
 stimela = "^2.1.2"
+zarr = "*"
+tdqm = "*"
+dask-ms = "*"
+dask = "*"
 
 
 [tool.poetry.scripts]
 imcontsub = "contsub.parser.imcontsub:runit"
+viscontsub = "contsub.parser.viscontsub:runit"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "*"
