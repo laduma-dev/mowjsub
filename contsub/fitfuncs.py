@@ -165,18 +165,12 @@ class FitGCVSpline(FitFunc):
             raise BadFitError(f"Polynomial fitting failed: {e}")
 
         return smooth_func(self.freqs)
+    
+
 class FitMedFilter(FitFunc):
     """
     Median filtering class for continuum subtraction 
     """
-<<<<<<< HEAD
-    def __init__(self, velWidth):
-        """
-        needs to know the order of the spline and the number of knots
-        """
-        self._velwid = velWidth
-=======
->>>>>>> b27693cad0ea9019e3da605f568f65ec36227d55
     
     def prepare(self):
         self.default_prepare()
@@ -313,15 +307,6 @@ class FitDCT(FitFunc):
         mask : a mask (not implemented really)
         weight : weights
         """
-<<<<<<< HEAD
-        if not (mask is None):
-            data[np.logical_not(mask)] = np.nan
-        nandata = np.hstack((np.full(self._imax//2, np.nan), data, np.full(self._imax//2, np.nan)))
-        filtered = np.nanmedian(np.lib.stride_tricks.sliding_window_view(nandata,self._imax), axis = 1)
-        # resMed = nanMed[~np.isnan(nanMed)]
-        
-        return filtered
-=======
 
         if not self.preped:
             self.prepare()
@@ -341,4 +326,3 @@ class FitDCT(FitFunc):
         dct_fit = fftpack.idct(dct_data, type=self.dct_type) * self.fnorm**2
         
         return dct_fit
->>>>>>> b27693cad0ea9019e3da605f568f65ec36227d55
