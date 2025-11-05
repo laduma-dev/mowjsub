@@ -6,7 +6,7 @@ from contsub import BIN
 from typing import Dict
 from scabha import init_logger
 from astropy import units
-import astropy.io.fits as fitsio
+from astropy.io import fits
 from scabha.basetypes import File
 import numpy as np
 import datetime

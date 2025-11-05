@@ -15,7 +15,6 @@ from contsub.fitfuncs import (
     FitGCVSpline,
 )
 import astropy.io.fits as fitsio
-from astropy.wcs import WCS
 from contsub.utils import zds_from_fits, get_automask, subtract_fits
 import dask.array as da
 import time
@@ -73,7 +72,16 @@ def runit(**kwargs):
         base_dims.remove("stokes")
     
     dims_string = "ra,dec,spectral"
-    has_stokes = zds.attrs["has_stokes"]
+    has_stokes = "stokes" in base_dims
+    stokes_idx = opts.stokes_index
+    
+    log.info(f"Input data dimensions: {zds.DATA.dims}")
+    log.info(f"Input data shape: {zds.DATA.shape}")
+    
+    if has_stokes:
+        cube = zds.DATA[...,stokes_idx]
+    else:
+        cube = zds.DATA
     
     
     nomask = True
@@ -118,7 +126,7 @@ def runit(**kwargs):
         else:
             mask_future = da.zeros_like(dblock, dtype=bool)
         
-        contfit = ContSub(fitfunc, nomask=False)
+        contfit = ContSub(fitfunc)
         
         getfit = da.gufunc(
             contfit.fitContinuum,
@@ -136,6 +144,7 @@ def runit(**kwargs):
     if has_stokes:
         continuum = continuum[np.newaxis,...]
     
+    import pdb; pdb.set_trace()
     out_ds_cont = fitsio.PrimaryHDU(continuum, header=header)
     
     out_ds_cont.writeto(outcont.PATH, overwrite=opts.overwrite)
