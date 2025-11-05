@@ -1,46 +1,68 @@
-from xarrayfits import xds_from_fits
 import xarray as xr
 from astropy.wcs import WCS
-from contsub.image_plane import ContSub
 from contsub.masking import PixSigmaClip, Mask
-from contsub.fitfuncs import FitBSpline
+from contsub.image_plane import ContSub
 from contsub import BIN
 from typing import Dict
 from scabha import init_logger
-import astropy.units as u
+from astropy import units
 import astropy.io.fits as fitsio
 from scabha.basetypes import File
 import numpy as np
 import datetime
+from daskms import xds_from_ms, xds_from_table
+from xarrayfits import xds_from_fits
+import dask.array as da
+from tqdm.dask import TqdmCallback
+import warnings
+
+warnings.filterwarnings("ignore", message=".*does not have a Zarr V3 specification.*")
+warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently not part.*")
+
 log = init_logger(BIN.im_plane)
 
 
-def get_automask(xspec, cube, sigma_clip=5, order=3, segments=400):
+def get_automask(cube, fitfunc, sigma_clip):
     """
     Generate a binary mask by sigma-thresholding the input cube
 
     Args:
         xspec (Array): Spectral coordinates
         cube (Array): Data cdube
-        sigma_clip (int, optional): _description_. Defaults to 5.
-        order (int, optional): _description_. Defaults to 3.
-        segments (int, optional): Length of spline segment in km/s. Defaults to 400.
+        sigma_clip(float): Sigma clip level
 
     Returns:
         Array : Binary mask (False is masked, True is not)
     """
 
     log.info("Creating binary mask as requested")
-    fitfunc = FitBSpline(order, segments)
-    contsub = ContSub(fitfunc, nomask=True, fit_tol=60)
-    cont_model = contsub.fitContinuum(xspec, cube, mask=None)
+    contsub = ContSub(fitfunc)
+    cont_model = contsub.fitContinuum(cube, mask=None)
     
     clip = PixSigmaClip(sigma_clip)
         
     mask = Mask(clip).getMask(cube - cont_model)
     log.info("Mask created sucessfully")
     
-    return mask
+    return ~mask
+
+def chans_in_velwidth(freqs:np.ndarray, velwidth:float):
+    """
+    Calculates the number of channels in given velocity width
+
+    Args:
+        freqs (np.ndarray): Frequency grid in Hz.
+        velwidth (float): Velocity width in m/s
+    """
+    speed_c = 2.998e8
+    df_low = np.partition(freqs, 2)[:2]
+    df_high = np.partition(freqs, 2)[-2:]
+    
+    dv_high = np.abs(np.diff(df_low) / np.mean(df_low)) * speed_c
+    dv_low = np.abs(np.diff(df_high) / np.mean(df_high)) * speed_c
+    dv = np.mean([dv_low, dv_high])
+    
+    return int(velwidth / dv)
 
 
 def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):
@@ -153,7 +175,7 @@ class FitsHeader():
             wcsfreq = wcs3d.spectral
         except:
             wcsfreq = wcs3d.sub(['spectral'])   
-        return np.around(wcsfreq.pixel_to_world(np.arange(0,freqDim)).to(u.MHz).value, decimals = 7)
+        return np.around(wcsfreq.pixel_to_world(np.arange(0,freqDim)).to(units.MHz).value, decimals = 7)
         
     def getAppendHeader(self, nchan):
         return self.spectralSplitHeader(nchan, orig = 'append_fits')
@@ -177,7 +199,6 @@ class FitsHeader():
         self._header['DATE'] = str(datetime.datetime.now()).replace(' ','T')
         self._header['ORIGIN'] = 'A. Kazemi-Moridani (combine_spatial)'
         return self._header
-    
     
     def getPrimeHeader(self, nchan, ydim, xdim, mask = False, orig = 'prime_header'):
         self._header['NAXIS1'] = int(xdim)
@@ -222,3 +243,110 @@ class FitsHeader():
         self._header['DATE'] = str(datetime.datetime.now()).replace(' ','T')
         self._header['ORIGIN'] = 'A. Kazemi-Moridani (spatial_split)'
         return self._header
+    
+def get_ds_from_msdsl(ms_dsl, field_id=0, data_desc_id=0):
+    found_ds = False
+    for ds in ms_dsl:
+        if ds.FIELD_ID == field_id and ds.DATA_DESC_ID == data_desc_id:
+            found_ds = True
+            break
+    if found_ds:
+        return ds
+    else:
+        raise ValueError("Dataset with FIELD_ID=1 and DATA_DESC_ID=1 not found in the MS.")
+    
+def ms_to_xarray_dataset(ms_path, spw_id:int, field_id:int, chunks:int,
+                        outchunks = {'time': 64, 'baseline': 64}, save_to_zarr=False):
+    
+    """ Creates Zarr store from a input MS. The resulting array has 
+    dimensions = time, basline, SPECTRAL, corr
+
+    Args:
+        ms path (str|path): MS file_
+        spw_id (int): Spectral window ID
+        field_id (int): Field ID
+        chunks (int): How to chunk the data
+        outchunks (dict, optional): xarray chunk object. Defaults to {'time': 64, 'baseline': 64}.
+        save_to_zarr (bool, optional): Save the output to Zarr. Defaults to False.  
+    Returns:
+        Zarr: Zarr array (persistant store, mode=w)
+    """
+    ms_dsl = xds_from_ms(
+        ms_path, 
+        index_cols=["TIME", "ANTENNA1", "ANTENNA2"],
+        group_cols=["FIELD_ID", "DATA_DESC_ID"],
+        chunks={"row": chunks } 
+    )
+    
+    spw_table = xds_from_table(f"{ms_path}::SPECTRAL_WINDOW")[0]
+    field_table = xds_from_table(f"{ms_path}::FIELD")[0]
+    antenna_table = xds_from_table(f"{ms_path}::ANTENNA")[0]
+
+    frequencies = spw_table.CHAN_FREQ.data[spw_id] 
+    channel_width = spw_table.CHAN_WIDTH.data[spw_id][0]  
+    ref_frequency = spw_table.REF_FREQUENCY.data[spw_id]
+
+    phase_center = field_table.PHASE_DIR.data[field_id].compute()[0] 
+
+    antenna_names = [name.strip() for name in antenna_table.NAME.data.compute()]
+    ds = get_ds_from_msdsl(ms_dsl, field_id=field_id, data_desc_id=spw_id)
+    
+    times = ds.TIME.data 
+    visibilities = ds.DATA.data
+    flags = ds.FLAG.data
+    weights = ds.WEIGHT_SPECTRUM.data 
+    uvw = ds.UVW.data
+    
+    nant = antenna_table.NAME.size
+    nbl = nant*(nant-1) // 2
+    nrow, nchan, ncorr = ds.DATA.shape
+    ntimes = nrow // nbl
+
+    unique_times = np.unique(times)
+
+    reshaped_vis = da.reshape(visibilities, (ntimes, nbl, nchan, ncorr))
+    reshaped_flags = da.reshape(flags, (ntimes, nbl, nchan, ncorr))
+    reshaped_weights = da.reshape(weights, (ntimes, nbl, nchan, ncorr))
+    
+    if ncorr == 2:  
+        corr_labels = ['XX', 'YY'][:ncorr]
+    else:
+        corr_labels = ['XX', 'XY', 'YX', 'YY'][:ncorr]
+
+    dataset = xr.Dataset(
+        {   #TO-DO: reshape the data for all 
+            'VIS': ([ 'time', 'baseline' , 'spectral', 'corr'], reshaped_vis), #time here will be time indicies
+            'FLAG': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_flags),
+            'WEIGHT': ([ 'time', 'baseline', 'spectral', 'corr'], reshaped_weights),
+            'UVW': (('time', 'baseline', 'uvw'), uvw.reshape(ntimes, nbl, 3)),
+        },
+        coords={
+            'FREQ': frequencies,  
+            'CORR':corr_labels, 
+            'TIME': unique_times,
+            'BASELINE': np.arange(nbl),
+        },
+        attrs={
+            
+            'ref_freq': float(ref_frequency),
+            'channel_width': float(channel_width),
+            'phase_center_ra': float(phase_center[0]),  # radians
+            'phase_center_dec': float(phase_center[1]),  # radians
+            'phase_center_ra_deg': float(np.degrees(phase_center[0])),  # degrees
+            'phase_center_dec_deg': float(np.degrees(phase_center[1])),  # degrees
+            'antenna_names': antenna_names,
+            'nant': nant,
+            'DATA_DESC_ID': spw_id,
+            'FIELD_ID': field_id
+        })
+    dataset = dataset.chunk(outchunks)
+    if not save_to_zarr:
+        return dataset
+    else:
+        outpath = f'tmp.zarr'
+        write_to_zarr = dataset.to_zarr(outpath, mode='w', compute=False)
+
+    with TqdmCallback(desc="Writing to Zarr"):
+        da.compute(write_to_zarr)
+
+    return outpath

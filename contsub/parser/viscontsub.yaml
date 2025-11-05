@@ -1,0 +1,72 @@
+libs:
+  spline:
+    _include: (contsub.parser.library)spline.yaml
+  polyn:
+    _include: (contsub.parser.library)polyn.yaml
+
+inputs:
+  ms:
+        info: Input MS file
+        dtype: File
+        must_exist: yes
+        required: yes
+        policies:
+          positional: true
+  input-column:
+        info: Column which contains the data to be continuum subtracted.
+        dtype: str
+        default: DATA 
+  output-column:
+        info: Column name to write the continuum subtracted data to
+        dtype: str
+        default: LINE_DATA  
+  fit-model:
+        info: Fit function to model the continuum. ** Only the spline and polynomial available in this version **.
+        dtype: str
+        choices:
+          - spline
+          - polynomial
+        default: spline
+  spwid:
+        info: Spectral Window ID
+        dtype: int
+        default: 0
+  field-id:
+        info: Field ID 
+        dtype: int
+        default: 0
+  row-chunks: 
+        info: Chunking strategy (Done along the time axis)
+        dtype: int
+        default: 10000
+  time-chunks:
+        info: Chunk size for time axis
+        dtype: int
+        default: 64
+  bl-chunks:
+        info: Chunk size for baseline axis
+        dtype: int
+        default: 10
+  cont-fit-tol:
+        info: "Minimum perentage of valid spectrum data points required to do a fit.
+              If the percentage of data points is below this percentage, original data will be returned."
+        dtype: float
+        default: 0
+  nworkers:
+        info: Number of workers (one per CPU)
+        dtype: int
+        default: 4
+  output-ms:
+        info: If provided, write the output to a new MS with this name. Otherwise, add new column to the input MS.
+        dtype: File
+        required: False
+  load-from-cache:
+        info: Load the MS from a cache (give Zarr file name) if available, otherwise create it.
+        dtype: File
+        required: False
+  _use:
+    - libs.spline.inputs
+
+
+outputs:
+  {}
