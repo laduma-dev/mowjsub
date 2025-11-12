@@ -93,11 +93,19 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False
     if not wcs.has_spectral:
         raise RuntimeError("Input FITS file does not have a spectral axis")
 
-    fds_xyz = fds.hdu.transpose(*axis_names)
+    n_axes = fds.hdu.data.ndim
 
-    new_names = ["ra", "dec", "spectral"]
-    if len(axis_names) == 4:
-        new_names.append("stokes")
+    if n_axes == 4:
+        new_names = ["ra", "dec", "spectral", "stokes"]
+        fds_xyz = fds.hdu.transpose(*axis_names[:4])
+    elif n_axes == 3:
+        new_names = ["ra", "dec", "spectral"]
+        fds_xyz = fds.hdu.transpose(*axis_names[:3])
+    else:
+        raise RuntimeError(f"Unexpected number of data axes ({n_axes}) in FITS file")
+    
+    #if len(axis_names) == 4:
+        #new_names.append("stokes")
 
     coords = dict([(a,fds.hdu[b].values) for a,b in zip(new_names,axis_names)])
     if add_freqs:

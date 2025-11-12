@@ -67,6 +67,7 @@ def runit(**kwargs):
     
     rest_freq = opts.rest_freq
     zds = zds_from_fits(infits.PATH, chunks=chunks, rest_freq=rest_freq, hdu_idx=opts.hdu_index, add_freqs=True)
+    header = fitsio.Header(zds.header)
     base_dims = ["ra", "dec", "spectral", "stokes"]
     if not hasattr(zds, "stokes"):
         base_dims.remove("stokes")
@@ -144,7 +145,6 @@ def runit(**kwargs):
     if has_stokes:
         continuum = continuum[np.newaxis,...]
     
-    import pdb; pdb.set_trace()
     out_ds_cont = fitsio.PrimaryHDU(continuum, header=header)
     
     out_ds_cont.writeto(outcont.PATH, overwrite=opts.overwrite)
