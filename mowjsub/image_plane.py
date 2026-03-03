@@ -10,13 +10,14 @@ class ContSub():
     """
     a class for performing continuum subtraction on data
     """
-    def __init__(self, fit_func):
+    def __init__(self, fit_func, nomask=False):
         """
         each object can be initiliazed by passing a data cube, a fitting function, and a mask
         Args:
             fit_func (Callable) : a fitting function should be built on FitFunc class
         """
         self.fit_func = fit_func
+        self.nomask = nomask 
         
         
     def fitContinuum(self, cube, mask):
@@ -34,6 +35,7 @@ class ContSub():
         dimx, dimy, _ = cube.shape
             
         cont_model = np.zeros_like(cube)
+
         if isinstance(mask, np.ndarray):
             nomask = False
             mask = np.asarray(mask, dtype=bool)

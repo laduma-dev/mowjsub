@@ -1,8 +1,3 @@
-libs:
-  spline:
-    _include: (contsub.parser.library)spline.yaml
-  polyn:
-    _include: (contsub.parser.library)polyn.yaml
 
 inputs:
   ms:
@@ -21,12 +16,31 @@ inputs:
         dtype: str
         default: LINE_DATA  
   fit-model:
-        info: Fit function to model the continuum. ** Only the spline and polynomial available in this version **.
+        info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
         dtype: str
         choices:
-          - spline
-          - polynomial
-        default: spline
+           - b-spline
+            - spline
+            - polynomial
+            - median-filter
+            - scipy-median-filter
+            - gcv-spline
+        default: b-spline
+  order:
+        info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
+        dtype: int
+  vel-width: 
+        info: Width of spline segments or median filter window in km/s.
+        dtype: float
+  chan-width:
+        info: Width of spline segments or median filter window in number of channels.
+        dtype: int
+  gcv-lambda:
+        info: GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset the parameter will be estimated using the GCV criterion; this can be very slow. Experience suggests that values chanwidth/nchan work best.
+        dtype: float
+  segments: 
+        info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same size as --order."
+        dtype: float
   spwid:
         info: Spectral Window ID
         dtype: int
@@ -64,8 +78,6 @@ inputs:
         info: Load the MS from a cache (give Zarr file name) if available, otherwise create it.
         dtype: File
         required: False
-  _use:
-    - libs.spline.inputs
 
 
 outputs:

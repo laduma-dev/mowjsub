@@ -47,7 +47,7 @@ inputs:
     info: GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset the parameter will be estimated using the GCV criterion; this can be very slow. Experience suggests that values chanwidth/nchan work best.
     dtype: float
   segments: 
-    info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same sixe as --order."
+    info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same size as --order."
     dtype: float
   cont-fit-tol:
     info: "Minimum perentage of valid spectrum data points required to do a fit.

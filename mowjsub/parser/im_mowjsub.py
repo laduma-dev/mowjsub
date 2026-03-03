@@ -1,21 +1,21 @@
-import contsub
+import mowjsub
 from scabha.schema_utils import clickify_parameters, paramfile_loader
 import click
 from scabha.basetypes import File
 from omegaconf import OmegaConf
 import glob
 import os
-from contsub import BIN
+from mowjsub import BIN
 from scabha import init_logger
-from contsub.image_plane import ContSub
-from contsub.fitfuncs import (
+from mowjsub.image_plane import ContSub
+from mowjsub.fitfuncs import (
     FitBSpline,
     FitPolynomial,
     FitMedFilter,
     FitGCVSpline,
 )
 import astropy.io.fits as fitsio
-from contsub.utils import zds_from_fits, get_automask, subtract_fits
+from mowjsub.utils import zds_from_fits, get_automask, subtract_fits
 import dask.array as da
 import time
 import numpy as np
@@ -26,13 +26,13 @@ command = BIN.im_plane
 thisdir  = os.path.dirname(__file__)
 source_files = glob.glob(f"{thisdir}/library/*.yaml")
 sources = [File(item) for item in source_files]
-parserfile = File(f"{thisdir}/{command}.yaml")
-config = paramfile_loader(parserfile, sources)[command]
+parserfile = File(f"{thisdir}/im_mowjsub.yaml")
+config = paramfile_loader(parserfile, sources)['im_mowjsub']
 
 log = init_logger(BIN.im_plane)
 
-@click.command("imcontsub")
-@click.version_option(str(contsub.__version__))
+@click.command("im-mowjsub")
+@click.version_option(str(mowjsub.__version__))
 @clickify_parameters(config)
 def runit(**kwargs):    
     start_time = time.time()
@@ -149,8 +149,8 @@ def runit(**kwargs):
     
     out_ds_cont.writeto(outcont.PATH, overwrite=opts.overwrite)
     log.info(f"Continuum model cube written to: {outcont}")
-    
-    out_ds_line = subtract_fits(infits.PATH, outcont.PATH, chunks={0: opts.ra_chunks, 1:None, 2:None})
+
+    out_ds_line = subtract_fits(infits.PATH, outcont.PATH, hdu_idx=opts.hdu_index, chunks={0: opts.ra_chunks, 1:None, 2:None})
     log.info(f"Writing residual data (line cube) to: {outline}")
     out_ds_line.writeto(outline.PATH, overwrite=opts.overwrite)
 

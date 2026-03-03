@@ -1,8 +1,8 @@
 import xarray as xr
 from astropy.wcs import WCS
-from contsub.masking import PixSigmaClip, Mask
-from contsub.image_plane import ContSub
-from contsub import BIN
+from mowjsub.masking import PixSigmaClip, Mask
+from mowjsub.image_plane import ContSub
+from mowjsub import BIN
 from typing import Dict
 from scabha import init_logger
 from astropy import units
@@ -120,7 +120,7 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False
 
     return ds.chunk(chunks)
 
-def subtract_fits(data_file: File, model_file: File, chunks: Dict):
+def subtract_fits(data_file: File, model_file: File, hdu_idx: int,chunks: Dict):
     """ Returns the residual of two FITS files as a FitsPrimaryHDU object
 
     Args:
@@ -132,8 +132,8 @@ def subtract_fits(data_file: File, model_file: File, chunks: Dict):
         FitsPrimaryHDU
     """
     
-    data_ds = xds_from_fits(data_file, chunks=chunks)[0]
-    model_ds = xds_from_fits(model_file, chunks=chunks)[0]
+    data_ds = xds_from_fits(data_file, hdus=hdu_idx, chunks=chunks)[0]
+    model_ds = xds_from_fits(model_file, hdus=hdu_idx, chunks=chunks)[0]
     residual_ds = data_ds.hdu.data - model_ds.hdu.data
     
     out_ds = data_ds.assign(hdu=(

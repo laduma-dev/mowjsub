@@ -4,6 +4,6 @@ from omegaconf import OmegaConf
 __version__ = metadata.version(__package__)
 
 BIN = OmegaConf.create({
-    "im_plane": "imcontsub",
-    "vis_plane": "viscontsub",
+    "im_plane": "im-mowjsub",
+    "vis_plane": "vis-mowjsub",
 })

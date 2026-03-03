@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "contsub"
+name = "mowjsub"
 version = "2.0rc1"
 description = "Radio astronomy data continuum subtraction tools"
 authors = ["Sphesihle Makhathini, Mika Naidoo", "Amir Kazemi-Moridani"]
@@ -25,8 +25,8 @@ dask = "*"
 
 
 [tool.poetry.scripts]
-imcontsub = "contsub.parser.imcontsub:runit"
-viscontsub = "contsub.parser.viscontsub:runit"
+im-mowjsub = "mowjsub.parser.im_mowjsub:runit"
+vis-mowjsub = "mowjsub.parser.vis_mowjsub:runit"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "*"

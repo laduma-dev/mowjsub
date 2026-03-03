@@ -7,7 +7,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 
-import contsub
+import mowjsub
 from datetime import date
 
 project = 'contsub'
@@ -15,8 +15,8 @@ author = 'Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo'
 release = '1.0.2'
 copyright = f'{date.today().year}, {author}'
 
-release = contsub.__version__
-version = contsub.__version__
+release = mowjsub.__version__
+version = mowjsub.__version__
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

@@ -3,7 +3,7 @@ from scipy.signal import convolve
 from scipy import ndimage
 from scabha import init_logger
 from abc import ABC, abstractmethod
-from contsub import BIN
+from mowjsub import BIN
 import warnings
 
 log = init_logger(BIN.im_plane)

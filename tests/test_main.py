@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from scabha import init_logger
-from contsub.fitfuncs import (
+from mowjsub.fitfuncs import (
     FitBSpline,
     FitGCVSpline,
     FitMedFilter,
@@ -9,7 +9,7 @@ from contsub.fitfuncs import (
     FitPolynomial,
     #FitDCT,
 )
-from contsub import utils
+from mowjsub import utils
 
 log = init_logger("contsub")
 

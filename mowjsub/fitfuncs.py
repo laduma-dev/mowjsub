@@ -6,7 +6,7 @@ from . import BIN
 from .exceptions import BadFitError
 import numpy as np
 from scipy import fftpack
-from contsub import utils
+from mowjsub import utils
 
 log = init_logger(BIN.im_plane)
 

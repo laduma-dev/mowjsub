@@ -3,7 +3,7 @@
 
 Installation
 =============
-The stable version Simms 3.0 is available on `PyPI <https://pypi.org/project/contsub>`_ and can be installed using:
+The stable version Mowj-sub is available on `PyPI <https://pypi.org/project/contsub>`_ and can be installed using:
 
 .. code-block:: bash
 

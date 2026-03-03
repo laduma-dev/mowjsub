@@ -1,20 +1,20 @@
-import contsub
+import mowjsub
 from scabha.schema_utils import clickify_parameters, paramfile_loader
 import click
 from scabha.basetypes import File
 from omegaconf import OmegaConf
 import glob
 import os
-from contsub import BIN
+from mowjsub import BIN
 from scabha import init_logger
 import dask.array as da
 import time
 import numpy as np
 import xarray as xr
 import dask.multiprocessing
-from contsub.utils import ms_to_xarray_dataset, get_ds_from_msdsl
-from contsub.visibility_plane import VisContSub
-from contsub.fitfuncs import FitBSpline, FitPolynomial
+from mowjsub.utils import ms_to_xarray_dataset, get_ds_from_msdsl
+from mowjsub.visibility_plane import VisContSub
+from mowjsub.fitfuncs import FitBSpline, FitPolynomial
 from dask.diagnostics import ProgressBar
 from tqdm.dask import TqdmCallback
 from daskms import xds_from_ms, xds_to_table
@@ -25,11 +25,11 @@ command = BIN.vis_plane
 thisdir  = os.path.dirname(__file__)
 source_files = glob.glob(f"{thisdir}/library/*.yaml")
 sources = [File(item) for item in source_files]
-parserfile = File(f"{thisdir}/{command}.yaml")
-config = paramfile_loader(parserfile, sources)[command]
+parserfile = File(f"{thisdir}/vis_mowjsub.yaml")
+config = paramfile_loader(parserfile, sources)['vis_mowjsub']
 
-@click.command("viscontsub")
-@click.version_option(str(contsub.__version__))
+@click.command("vis-mowjsub")
+@click.version_option(str(mowjsub.__version__))
 @clickify_parameters(config)
 def runit(**kwargs):    
     start_time = time.time()
@@ -39,7 +39,7 @@ def runit(**kwargs):
     spwid = opts.spwid
     fieldid = opts.field_id
     chunksize = opts.row_chunks
-    segments = opts.segments[0]
+    velwidth = opts.vel_width or opts.segments
     method = opts.fit_model
     order = opts.order[0]
     nworkers = opts.nworkers
@@ -63,7 +63,7 @@ def runit(**kwargs):
     futures = []
     
     if method == 'spline':
-        fitfunc = FitBSpline(order, segments, randomState=None, seq=None)
+        fitfunc = FitBSpline(order, velwidth, randomState=None, seq=None)
     elif method == 'polynomial':
         fitfunc = FitPolynomial(order, cont_tol)
     else:
