@@ -1,0 +1,93 @@
+input-image:
+  info: Input image
+  dtype: File
+  must_exist: yes
+  required: yes
+  policies:
+    positional: yes
+output-prefix:
+  info: Name of ouput image
+  dtype: str
+mask-image:
+  info: Mask image
+  dtype: File
+  must_exist: true
+sigma-clip:
+  info: Sigma clip for each iteration. Only required if mask-image is not given.
+  dtype: List[float]
+  policies:
+    repeat: "[]"
+automask-per-iter:
+  info: Generate a new mask per iteration.
+  dtype: bool
+  default: False
+fit-model:
+  info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
+  dtype: str
+  choices:
+    - b-spline
+    - spline
+    - polynomial
+    - median-filter
+    - scipy-median-filter
+    - gcv-spline
+  default: b-spline
+order:
+  info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
+  dtype: int
+vel-width: 
+  info: Width of spline segments or median filter window in km/s.
+  dtype: float
+chan-width:
+  info: Width of spline segments or median filter window in number of channels.
+  dtype: int
+gcv-lambda:
+  info: GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset the parameter will be estimated using the GCV criterion; this can be very slow. Experience suggests that values chanwidth/nchan work best.
+  dtype: float
+segments: 
+  info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same size as --order."
+  dtype: float
+cont-fit-tol:
+  info: "Minimum perentage of valid spectrum data points required to do a fit.
+        Spectra below this tolerance will be set to NaN.
+        Leaving this unset may result in poor or NaN spectra in the output cubes"
+  dtype: float
+  default: 0
+overwrite:
+  info: Overwrite output image if it already exists
+  dtype: bool
+  default: yes
+stokes-index:
+  info: "Index of stokes channel (zero-based) to use."
+  dtype: int
+  default: 0
+rest-freq:
+  info: Cube rest frequency in MHz. Will ignore the one in the FITS header if it exists.
+  dtype: float
+stokes-axis:
+  info: "### DEPRECATED #### Set this flag if the input image has a stokes dimension. (Default is True)."
+  default: yes
+  dtype: bool
+hdu-index:
+  info: FITS primary HDU index
+  dtype: int
+  default: 0
+  abbreviation: hi
+ra-chunks:
+  info: Chunking along RA-axis. If set to zero, no Chunking is perfomed.
+  dtype: int 
+  default: 64
+nworkers:
+  info: Number of workers (one per CPU)
+  dtype: int
+  default: 4
+loglevel:
+  info: Log level for the output
+  dtype: str
+  default: info
+  choices:
+    - info
+    - debug
+    - trace
+    - error
+    - critical

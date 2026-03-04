@@ -1,4 +1,3 @@
-
 inputs:
   input-image:
     info: Input image
@@ -63,7 +62,6 @@ inputs:
     info: "Index of stokes channel (zero-based) to use."
     dtype: int
     default: 0
-    choices: [0,1,2,3]
   rest-freq:
     info: Cube rest frequency in MHz. Will ignore the one in the FITS header if it exists.
     dtype: float
