@@ -7,13 +7,14 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 
-import mowjsub
 from datetime import date
 
-project = 'contsub'
-author = 'Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo'
-release = '1.0.2'
-copyright = f'{date.today().year}, {author}'
+import mowjsub
+
+project = "contsub"
+author = "Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo"
+release = "1.0.2"
+copyright = f"{date.today().year}, {author}"
 
 release = mowjsub.__version__
 version = mowjsub.__version__
@@ -22,16 +23,16 @@ version = mowjsub.__version__
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 
-templates_path = ['_templates']
+templates_path = ["_templates"]
 exclude_patterns = []
 
-language = 'en'
+language = "en"
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'furo'
-#html_static_path = ['build/html/_static']
+html_theme = "furo"
+# html_static_path = ['build/html/_static']
 
 
 needs_sphinx = "8.1"
