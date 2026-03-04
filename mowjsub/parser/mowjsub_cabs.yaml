@@ -1,0 +1,22 @@
+libs:
+  im:
+    _include: (mowjsub.parser)im_mowjsub.yaml
+  vis:
+    _include: (mowjsub.parser)vis_mowjsub.yaml
+
+cabs:
+  im-mowjsub:
+    info: Hey Mika, add me
+    command: im-mowjsub
+    inputs:
+      _use: libs.im.inputs
+    outputs:
+      _use: libs.vis.outputs
+  
+  vis-mowjsub:
+    info: Hi Mika, please add me
+    command: vis-mowjsub
+    inputs:
+      _use: libs.vis.inputs
+    outputs:
+      _use: libs.vis.outputs
