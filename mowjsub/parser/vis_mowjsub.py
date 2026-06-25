@@ -59,7 +59,7 @@ def runit(**kwargs):
 
     ds = xr.open_zarr(temp_zarr, chunks=outchunks)
 
-    xspec = ds.coords["FREQ"]
+    xspec = np.asarray(ds.coords["FREQ"])
 
     futures = []
 
@@ -71,27 +71,25 @@ def runit(**kwargs):
         raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline', 'polynomial'.")
 
     base_dims = "TIME, BASELINE, FREQ, CORR"
-    signature = f"(FREQ),({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
+    signature = f"({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
     meta = (np.ndarray((), ds.VIS.dtype),)
 
     dask.config.set(scheduler="threads", num_workers=nworkers)
 
+    contfit = VisContSub(fitfunc)
+    get_cont = da.gufunc(
+        contfit.vis_cont_sub,
+        signature=signature,
+        meta=meta,
+        allow_rechunk=True,
+    )
+
     for biter, dblock in enumerate(ds.VIS.data.blocks):
-        # if biter > 0:
-        # continue
         flags = ds.FLAG.data.blocks[biter]
         weights = ds.WEIGHT.data.blocks[biter]
 
-        contfit = VisContSub(fitfunc)
-        get_cont = da.gufunc(
-            contfit.vis_cont_sub,
-            signature=signature,
-            meta=meta,
-            allow_rechunk=True,
-        )
         futures.append(
             get_cont(
-                xspec,
                 dblock,
                 flags,
                 weights,
@@ -112,7 +110,7 @@ def runit(**kwargs):
         chunks={"row": chunksize},
     )
 
-    msds = get_ds_from_msdsl(ms_dsl, spwid, fieldid)
+    msds = get_ds_from_msdsl(ms_dsl, field_id=fieldid, data_desc_id=spwid)
 
     ms_ds = msds.assign(
         **{

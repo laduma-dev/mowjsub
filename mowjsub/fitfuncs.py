@@ -32,8 +32,8 @@ class FitFunc:
         """
         self.velwidth = velwidth
         self.fit_tol = fit_tol
-        self.freqs = freqs
-        self.nchan = freqs.size
+        self.freqs = np.asarray(freqs)
+        self.nchan = self.freqs.size
         self.order = order
         self.preped = False
         self.chanwidth = chanwidth
@@ -345,8 +345,9 @@ class FitDCT(FitFunc):
         baseline_median = baseline.fit(data, mask=mask, weights=None)
 
         dct_data = fftpack.dct(baseline_median, type=self.dct_type)
-        sort_idx = np.argsort(np.absolute(dct_data))[: -self.order]
-        dct_data[sort_idx] = 0
+        if self.order > 0:
+            sort_idx = np.argsort(np.absolute(dct_data))[: -self.order]
+            dct_data[sort_idx] = 0
         dct_fit = fftpack.idct(dct_data, type=self.dct_type) * self.fnorm**2
 
         return dct_fit

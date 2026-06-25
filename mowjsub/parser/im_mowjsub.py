@@ -58,11 +58,11 @@ def runit(**kwargs):
     if opts.overwrite is False and (outcont.EXISTS or outline.EXISTS):
         raise RuntimeError("At least one output file exists, but --no-overwrite has been set. Unset it to proceed.")
 
-    if opts.fit_model in "spline polynomial dct".split() and not getattr(opts, "order", False):
-        raise RuntimeError("The parameter 'order' is required for fit-model={opts.fit_model}.")
+    if opts.fit_model in "spline polynomial dct".split() and getattr(opts, "order", None) is None:
+        raise RuntimeError(f"The parameter 'order' is required for fit-model={opts.fit_model}.")
 
-    if opts.fit_model in "spline median-filter dct".split() and not getattr(opts, "vel_width", False):
-        raise RuntimeError("The parameter 'vel-width' is required for fit-model={opts.fit_model}.")
+    if opts.fit_model in "spline median-filter dct".split() and getattr(opts, "vel_width", None) is None:
+        raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={opts.fit_model}.")
 
     velwidth = opts.vel_width or opts.segments
     chunks = dict(ra=opts.ra_chunks or 64, dec=None, spectral=None)
