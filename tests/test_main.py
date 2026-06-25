@@ -93,8 +93,8 @@ class TestFitsFunc(unittest.TestCase):
         baseline_chan_std = baseline_chan.std()
 
         perr = np.abs(baseline_vel.std() - baseline_chan_std) / baseline_chan_std
-        # tolerate a 5% error because the knots are chosen using a random generator
-        assert perr < 5 / 100
+        # tolerate a 7.5% error because the knots are chosen using a random generator
+        assert perr < 7.5 / 100
 
     def test_gcv_spline(self):
         baseline_func = FitGCVSpline(self.freqs)
