@@ -27,7 +27,7 @@ inputs:
             - gcv-spline
         default: b-spline
   order:
-        info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
+        info: Order of spline/polynomial or number of top coefficients to use for DCT reconstruction
         dtype: int
   vel-width: 
         info: Width of spline segments or median filter window in km/s.
@@ -62,7 +62,7 @@ inputs:
         dtype: int
         default: 10
   cont-fit-tol:
-        info: "Minimum perentage of valid spectrum data points required to do a fit.
+        info: "Minimum percentage of valid spectrum data points required to do a fit.
               If the percentage of data points is below this percentage, original data will be returned."
         dtype: float
         default: 0
