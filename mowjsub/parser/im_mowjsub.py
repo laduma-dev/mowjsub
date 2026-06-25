@@ -114,8 +114,8 @@ def runit(**kwargs):
         fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
         fitfunc.prepare()
     elif opts.fit_model == "gcv-spline":
-        fitfunc = FitGCVSpline(xspec, fit_tol=opts.cont_fit_tol)
-        fitfunc.prepare(lam=opts.gcv_lambda)
+        fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=opts.cont_fit_tol)
+        fitfunc.prepare()
 
     get_mask = da.gufunc(
         lambda _data: get_automask(_data, fitfunc, opts.sigma_clip),

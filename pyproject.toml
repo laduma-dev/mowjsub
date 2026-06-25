@@ -19,7 +19,7 @@ dependencies = [
 	"xarray",
 	"stimela>=2.1.2,<3",
 	"zarr",
-	"tdqm",
+	"tqdm",
 	"dask-ms",
 	"dask",
 ]

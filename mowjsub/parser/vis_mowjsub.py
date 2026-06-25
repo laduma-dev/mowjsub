@@ -64,9 +64,9 @@ def runit(**kwargs):
     futures = []
 
     if method == "spline":
-        fitfunc = FitBSpline(order, velwidth, randomState=None, seq=None)
+        fitfunc = FitBSpline(xspec, order=order, velwidth=velwidth, fit_tol=cont_tol)
     elif method == "polynomial":
-        fitfunc = FitPolynomial(order, cont_tol)
+        fitfunc = FitPolynomial(xspec, order=order, fit_tol=cont_tol)
     else:
         raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline', 'polynomial'.")
 
@@ -82,7 +82,7 @@ def runit(**kwargs):
         flags = ds.FLAG.data.blocks[biter]
         weights = ds.WEIGHT.data.blocks[biter]
 
-        contfit = VisContSub(fitfunc, fit_tol=opts.cont_fit_tol)
+        contfit = VisContSub(fitfunc)
         get_cont = da.gufunc(
             contfit.vis_cont_sub,
             signature=signature,

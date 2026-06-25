@@ -6,8 +6,8 @@ Reference
     :format: latex html
 
 
-.. click:: contsub.parser.imcontsub:runit
-    :prog: imcontsub
+.. click:: mowjsub.parser.im_mowjsub:runit
+    :prog: im-mowjsub
     :nested: full
 
 

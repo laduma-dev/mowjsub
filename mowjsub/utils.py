@@ -258,7 +258,7 @@ def get_ds_from_msdsl(ms_dsl, field_id=0, data_desc_id=0):
     if found_ds:
         return ds
     else:
-        raise ValueError("Dataset with FIELD_ID=1 and DATA_DESC_ID=1 not found in the MS.")
+        raise ValueError(f"Dataset with FIELD_ID={field_id} and DATA_DESC_ID={data_desc_id} not found in the MS.")
 
 
 def ms_to_xarray_dataset(
