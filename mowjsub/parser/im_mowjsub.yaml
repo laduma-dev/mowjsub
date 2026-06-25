@@ -1,4 +1,3 @@
-
 inputs:
   input-image:
     info: Input image
@@ -35,7 +34,7 @@ inputs:
       - gcv-spline
     default: b-spline
   order:
-    info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
+    info: Order of spline/polynomial or number of top coefficients to use for DCT reconstruction
     dtype: int
   vel-width: 
     info: Width of spline segments or median filter window in km/s.
@@ -47,10 +46,10 @@ inputs:
     info: GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset the parameter will be estimated using the GCV criterion; this can be very slow. Experience suggests that values chanwidth/nchan work best.
     dtype: float
   segments: 
-    info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same sixe as --order."
+    info: "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter window in km/s. If given as a list, then it must have same size as --order."
     dtype: float
   cont-fit-tol:
-    info: "Minimum perentage of valid spectrum data points required to do a fit.
+    info: "Minimum percentage of valid spectrum data points required to do a fit.
           Spectra below this tolerance will be set to NaN.
           Leaving this unset may result in poor or NaN spectra in the output cubes"
     dtype: float
@@ -63,7 +62,6 @@ inputs:
     info: "Index of stokes channel (zero-based) to use."
     dtype: int
     default: 0
-    choices: [0,1,2,3]
   rest-freq:
     info: Cube rest frequency in MHz. Will ignore the one in the FITS header if it exists.
     dtype: float

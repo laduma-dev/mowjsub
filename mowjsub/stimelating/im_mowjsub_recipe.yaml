@@ -1,0 +1,39 @@
+_include:
+    - (mowjsub.stimelating)mowjsub_cabs.yaml
+
+opts:
+  backend:
+    select: native
+
+im-mowjsub:
+  name: im-mowjsub
+  info: Image plane continuum subtraction
+  inputs:
+    indir:
+      info: Input Directory
+      dtype: Directory
+      default: input # Insert your input directory here
+      must_exist: yes
+    outdir:
+      info: Output Directory
+      dtype: Directory
+      default: output # Insert your output directory here
+      must_exist: yes
+      
+  steps:
+    im-mowjsub:
+      info: Image plane cont sub
+      cab: im-mowjsub
+      params: #adjust the parameters below as needed, see mowjsub.stimelating.im_mowjsub_param.yaml for all input parameters
+        input-image: '{recipe.indir}/<yourfitscube>.fits' # Insert the name of your input FITS cube here
+        output-prefix: '{recipe.outdir}/im_mowjsub' # Insert the prefix for you cubes (or leave unchanged)
+        fit-model: b-spline
+        order: 3
+        vel-width: 400
+    
+
+
+
+
+
+

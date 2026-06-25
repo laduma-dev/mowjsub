@@ -1,49 +1,63 @@
-[tool.poetry]
-name = "contsub"
+[project]
+name = "mowjsub"
 version = "2.0rc1"
 description = "Radio astronomy data continuum subtraction tools"
-authors = ["Sphesihle Makhathini, Mika Naidoo", "Amir Kazemi-Moridani"]
-license = "MIT"
+authors = [
+	{ name = "Sphesihle Makhathini" },
+	{ name = "Mika Naidoo" },
+	{ name = "Amir Kazemi-Moridani" },
+]
+requires-python = ">=3.11,<3.14"
 readme = "README.rst"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+	"numpy",
+	"astropy",
+	"scipy",
+	"xarray-fits",
+	"xarray",
+	"stimela>=2.1.2,<3",
+	"zarr",
+	"tqdm",
+	"dask-ms",
+	"dask",
+]
+
+[project.scripts]
+im-mowjsub = "mowjsub.parser.im_mowjsub:runit"
+vis-mowjsub = "mowjsub.parser.vis_mowjsub:runit"
+
+[dependency-groups]
+dev = [
+	"jupyter",
+	"matplotlib",
+]
+
+ruff = [
+    "pre-commit>=4.3.0",
+    "ruff>=0.12.9",
+]
+
+tests = [
+	"pytest==8.4.1",
+    {include-group = "ruff"}
+    ]
+
+docs = [
+	"Sphinx>=8.1,<9",
+	"sphinx-copybutton",
+	"furo",
+	"sphinx-rtd-theme",
+	"sphinx_click==6.0.0",
+]
+
+[tool.hatch.build.targets.sdist]
+include = ["mowjsub"]
+
+[tool.hatch.build.targets.wheel]
+include = ["mowjsub"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.dependencies]
-python = ">=3.10,<3.14"
-numpy = "*"
-astropy = "*"
-scipy = "*"
-xarray-fits = "*"
-xarray = "*"
-stimela = "^2.1.2"
-zarr = "*"
-tdqm = "*"
-dask-ms = "*"
-dask = "*"
-
-
-[tool.poetry.scripts]
-imcontsub = "contsub.parser.imcontsub:runit"
-viscontsub = "contsub.parser.viscontsub:runit"
-
-[tool.poetry.group.dev.dependencies]
-jupyter = "*"
-matplotlib = "*"
-
-[tool.poetry.group.tests]
-optional = true
-[tool.poetry.group.tests.dependencies]
-pytest = "8.4.1"
-flake8 = "*"
-
-
-[tool.poetry.group.docs]
-optional = true
-[tool.poetry.group.docs.dependencies]
-Sphinx = "^8.1"
-sphinx-copybutton = "*"
-furo = "*"
-sphinx-rtd-theme = "*"
-sphinx_click = "6.0.0"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

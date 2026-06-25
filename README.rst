@@ -1,8 +1,8 @@
-Contsub
+Mowjsub
 =======
 
-.. image:: https://img.shields.io/pypi/v/contsub.svg
-    :target: https://pypi.org/project/contsub/
+.. image:: https://img.shields.io/pypi/v/mowjsub.svg
+    :target: https://pypi.org/project/mowjsub/
     :alt: PyPI version
 
 .. image:: https://readthedocs.org/projects/contsub/badge/?version=latest
@@ -20,14 +20,14 @@ PyPI (stable; recommended)
 
 .. code-block:: bash
 
-    pip install contsub
+    pip install mowjsub
 
 Latest (in development)
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: bash
 
-    pip install git+https://github.com/laduma-dev/contsub.git
+    pip install git+https://github.com/laduma-dev/mowjsub.git
 
 The full documentation is available on `readthedocs <https://contsub.readthedocs.io/>`_.
 

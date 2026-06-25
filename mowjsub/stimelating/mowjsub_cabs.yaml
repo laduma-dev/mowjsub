@@ -1,0 +1,12 @@
+cabs:
+  im-mowjsub:
+    info: Perform image plane continuum subtraction on an input FITs file
+    command: im-mowjsub
+    inputs:
+      _include: (mowjsub.stimelating)im_mowjsub_param.yaml
+    
+  vis-mowjsub:
+    info: Perform visibility plane continuum subtraction on an input Measurement Set (MS)
+    command: vis-mowjsub
+    inputs:
+      _include: (mowjsub.stimelating)vis_mowjsub_param.yaml
