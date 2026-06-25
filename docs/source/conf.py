@@ -11,9 +11,8 @@ from datetime import date
 
 import mowjsub
 
-project = "contsub"
+project = "mowjsub"
 author = "Amir Kazemi-Moridani, Sphesihle Makhathini, Mika Naidoo"
-release = "1.0.2"
 copyright = f"{date.today().year}, {author}"
 
 release = mowjsub.__version__
