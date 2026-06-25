@@ -7,7 +7,7 @@ authors = [
 	{ name = "Mika Naidoo" },
 	{ name = "Amir Kazemi-Moridani" },
 ]
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.14"
 readme = "README.rst"
 license = "MIT"
 license-files = ["LICENSE"]
