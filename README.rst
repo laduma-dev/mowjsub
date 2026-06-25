@@ -49,7 +49,10 @@ environment, and sync dependencies:
 
     source /path/to/your/.venv/bin/activate
 
-    uv sync --python 3.12 --active #NOTE: --active ensures the package is installed in your activated virtual environment
+    uv sync --python 3.12 --active 
+.. note::
+
+    ``--active`` ensures the package is installed in your activated virtual environment.
 
 The full documentation is available on `readthedocs <https://contsub.readthedocs.io/>`_.
 
