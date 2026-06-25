@@ -13,7 +13,7 @@ from mowjsub.fitfuncs import (
     # FitDCT,
 )
 
-log = init_logger("contsub")
+log = init_logger("mowjsub")
 
 
 class TestFitsFunc(unittest.TestCase):
