@@ -90,11 +90,12 @@ class TestFitsFunc(unittest.TestCase):
         baseline_chan = baseline_func.fit(self.data, mask=self.mask, weights=None)
 
         assert baseline_chan.shape == self.data.shape
-        baseline_chan_std = baseline_chan.std()
 
-        perr = np.abs(baseline_vel.std() - baseline_chan_std) / baseline_chan_std
-        # tolerate a 7.5% error because the knots are chosen using a random generator
-        assert perr < 7.5 / 100
+        resid = baseline_chan - baseline_vel
+        resid_median = np.median(resid)
+        mad = np.median(np.abs(resid - resid_median))
+
+        assert mad < 5e-2
 
     def test_gcv_spline(self):
         baseline_func = FitGCVSpline(self.freqs)
