@@ -35,7 +35,7 @@ uv run vis-mowjsub [options]
 
 Pre-commit hooks run ruff check + ruff format automatically on commit (`pre-commit install` to activate).
 
-Linting config is in `ruff.toml`: line length 180, target Python 3.10, isort enabled.
+Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort enabled.
 
 ## Architecture
 
