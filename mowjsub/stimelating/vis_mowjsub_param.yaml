@@ -25,7 +25,7 @@ fit-model:
           - gcv-spline
       default: b-spline
 order:
-      info: Order of spline/polynomial or number of top coefficeints to use for DCT reconstruction
+      info: Order of spline/polynomial or number of top coefficients to use for DCT reconstruction
       dtype: int
 vel-width: 
       info: Width of spline segments or median filter window in km/s.
