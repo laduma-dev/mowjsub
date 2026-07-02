@@ -19,12 +19,12 @@ inputs:
         info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
         dtype: str
         choices:
-           - b-spline
-            - spline
-            - polynomial
-            - median-filter
-            - scipy-median-filter
-            - gcv-spline
+          - b-spline
+          - spline
+          - polynomial
+          - median-filter
+          - scipy-median-filter
+          - gcv-spline
         default: b-spline
   order:
         info: Order of spline/polynomial or number of top coefficients to use for DCT reconstruction
@@ -60,7 +60,6 @@ inputs:
   bl-chunks:
         info: Chunk size for baseline axis
         dtype: int
-        default: 10
   cont-fit-tol:
         info: "Minimum percentage of valid spectrum data points required to do a fit.
               If the percentage of data points is below this percentage, original data will be returned."
@@ -75,7 +74,7 @@ inputs:
         dtype: File
         required: False
   load-from-cache:
-        info: Load the MS from a cache (give Zarr file name) if available, otherwise create it.
+        info: Load the MS from a cache (give Zarr file name) if available
         dtype: File
         required: False
 

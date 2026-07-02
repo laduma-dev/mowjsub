@@ -131,17 +131,20 @@ class FitBSpline(FitFunc):
 
         knot_positions = x_masked[knots_idx]
 
-        if isinstance(weights, np.ndarray):
-            splCfs = splrep(
-                x_masked,
-                data_masked,
-                task=-1,
-                w=weights[~mask],
-                t=knot_positions,
-                k=self.order,
-            )
-        else:
-            splCfs = splrep(x_masked, data_masked, task=-1, t=knot_positions, k=self.order)
+        try:
+            if isinstance(weights, np.ndarray):
+                splCfs = splrep(
+                    x_masked,
+                    data_masked,
+                    task=-1,
+                    w=weights[~mask],
+                    t=knot_positions,
+                    k=self.order,
+                )
+            else:
+                splCfs = splrep(x_masked, data_masked, task=-1, t=knot_positions, k=self.order)
+        except Exception as exc:
+            raise BadFitError(f"B-spline fit failed: {exc}") from exc
 
         return splev(self.freqs, splCfs)
 

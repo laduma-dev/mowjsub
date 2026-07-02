@@ -97,6 +97,17 @@ class TestFitsFunc(unittest.TestCase):
 
         assert mad < 5e-2
 
+    def test_b_spline_with_hz_frequencies(self):
+        freqs = np.linspace(8.56e8, 8.56e8 + 40 * 2.01e7, 41)
+        data = np.sin(np.linspace(0, 2 * np.pi, freqs.size)) + 0.1
+        mask = np.zeros(freqs.size, dtype=bool)
+
+        baseline_func = FitBSpline(freqs, order=3, velwidth=800)
+        baseline = baseline_func.fit(data, mask=mask, weights=None)
+
+        assert baseline.shape == data.shape
+        assert np.isfinite(baseline).all()
+
     def test_gcv_spline(self):
         baseline_func = FitGCVSpline(self.freqs)
         baseline = baseline_func.fit(self.data, mask=self.mask, weights=None)

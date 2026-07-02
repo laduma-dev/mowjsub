@@ -16,7 +16,7 @@ from tqdm.dask import TqdmCallback
 
 import mowjsub
 from mowjsub import BIN
-from mowjsub.fitfuncs import FitBSpline, FitPolynomial
+from mowjsub.fitfuncs import FitBSpline, FitGCVSpline, FitMedFilter, FitMedFilterFast, FitPolynomial
 from mowjsub.utils import get_ds_from_msdsl, ms_to_xarray_dataset
 from mowjsub.visibility_plane import VisContSub
 
@@ -43,14 +43,18 @@ def runit(**kwargs):
     chunksize = opts.row_chunks
     velwidth = opts.vel_width or opts.segments
     method = opts.fit_model
-    order = opts.order[0]
+    order = opts.order
     nworkers = opts.nworkers
-    outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
     input_column = opts.input_column
     output_column = opts.output_column
     zarr_name = opts.load_from_cache
     cont_tol = opts.cont_fit_tol
 
+    if opts.bl_chunks:
+        outchunks = dict(time=opts.time_chunks, baseline=opts.bl_chunks)
+    else: 
+        outchunks = dict(time=opts.time_chunks)
+        
     if opts.load_from_cache:
         temp_zarr = zarr_name
     else:
@@ -63,12 +67,20 @@ def runit(**kwargs):
 
     futures = []
 
-    if method == "spline":
+    if method in ["spline", "b-spline"]:
         fitfunc = FitBSpline(xspec, order=order, velwidth=velwidth, fit_tol=cont_tol)
     elif method == "polynomial":
         fitfunc = FitPolynomial(xspec, order=order, fit_tol=cont_tol)
+    elif method == "median-filter":
+        fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=cont_tol)
+    elif method == "scipy-median-filter":
+        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, fit_tol=cont_tol)
+    elif method == "gcv-spline":
+        fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=cont_tol)
     else:
-        raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline', 'polynomial'.")
+        raise ValueError(
+            f"Unknown fitting method: {method}. Supported methods: 'spline', 'b-spline', 'polynomial', 'median-filter', 'scipy-median-filter', 'gcv-spline'."
+        )
 
     base_dims = "TIME, BASELINE, FREQ, CORR"
     signature = f"({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
@@ -97,8 +109,11 @@ def runit(**kwargs):
         )
 
     continuum_dask = da.concatenate(futures)
+    with TqdmCallback(desc="Fitting continuum"):
+        continuum_np = continuum_dask.compute(scheduler="processes", num_workers=nworkers)
 
-    continuum_xarray = xr.DataArray(data=continuum_dask, dims=ds.VIS.dims, coords=ds.VIS.coords)
+    continuum_xarray = xr.DataArray(data=continuum_np, dims=ds.VIS.dims, coords=ds.VIS.coords)
+    # continuum_xarray = xr.DataArray(data=continuum_dask, dims=ds.VIS.dims, coords=ds.VIS.coords)
 
     continuum = continuum_xarray.stack(row=("time", "baseline"))
     continuum = continuum.transpose("row", ...).chunk({"row": chunksize})
