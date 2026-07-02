@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import warnings
 from typing import Dict
@@ -266,8 +268,11 @@ def ms_to_xarray_dataset(
     spw_id: int,
     field_id: int,
     chunks: int,
-    outchunks={"time": 64, "baseline": 64},
-    save_to_zarr=False,
+    outchunks:dict[str,int] = {"time": 64, "baseline": 64},
+    input_column: None|str = "DATA",
+    model_column: None|str = None,
+    save_to_zarr: None|bool = False,
+    
 ):
     """Creates Zarr store from a input MS. The resulting array has
     dimensions = time, basline, SPECTRAL, corr
@@ -279,6 +284,7 @@ def ms_to_xarray_dataset(
         chunks (int): How to chunk the data
         outchunks (dict, optional): xarray chunk object. Defaults to {'time': 64, 'baseline': 64}.
         save_to_zarr (bool, optional): Save the output to Zarr. Defaults to False.
+        model_column (str, optional): Name of the model column to subtract. Defaults to None.
     Returns:
         Zarr: Zarr array (persistant store, mode=w)
     """
@@ -303,14 +309,19 @@ def ms_to_xarray_dataset(
     ds = get_ds_from_msdsl(ms_dsl, field_id=field_id, data_desc_id=spw_id)
 
     times = ds.TIME.data
-    visibilities = ds.DATA.data
+
+    if model_column:
+        visibilities = ds[input_column].data - ds[model_column].data
+    else:
+        visibilities = ds[input_column].data
+    
     flags = ds.FLAG.data
     weights = ds.WEIGHT_SPECTRUM.data
     uvw = ds.UVW.data
 
     nant = antenna_table.NAME.size
     nbl = nant * (nant - 1) // 2
-    nrow, nchan, ncorr = ds.DATA.shape
+    nrow, nchan, ncorr = ds[input_column].shape
     ntimes = nrow // nbl
 
     unique_times = np.unique(times)

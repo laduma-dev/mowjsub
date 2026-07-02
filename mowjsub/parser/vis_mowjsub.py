@@ -46,6 +46,7 @@ def runit(**kwargs):
     order = opts.order
     nworkers = opts.nworkers
     input_column = opts.input_column
+    model_column = opts.model_column
     output_column = opts.output_column
     zarr_name = opts.load_from_cache
     cont_tol = opts.cont_fit_tol
@@ -58,7 +59,15 @@ def runit(**kwargs):
     if opts.load_from_cache:
         temp_zarr = zarr_name
     else:
-        temp_zarr = ms_to_xarray_dataset(ms, spwid, fieldid, chunksize, save_to_zarr=True)
+        temp_zarr = ms_to_xarray_dataset(ms, 
+                                         spwid, 
+                                         fieldid, 
+                                         chunksize,
+                                         outchunks, 
+                                         input_column=input_column, 
+                                         model_column=model_column, 
+                                         save_to_zarr=True
+                                         )
         temp_zarr = "tmp.zarr"
 
     ds = xr.open_zarr(temp_zarr, chunks=outchunks)
@@ -118,6 +127,10 @@ def runit(**kwargs):
     continuum = continuum_xarray.stack(row=("time", "baseline"))
     continuum = continuum.transpose("row", ...).chunk({"row": chunksize})
 
+    visdata_xarray = xr.DataArray(data=ds.VIS.data, dims=ds.VIS.dims, coords=ds.VIS.coords)
+    visdata = visdata_xarray.stack(row=("time", "baseline"))
+    visdata = visdata.transpose("row", ...).chunk({"row": chunksize})
+
     ms_dsl = xds_from_ms(
         ms,
         index_cols=["TIME", "ANTENNA1", "ANTENNA2"],
@@ -127,27 +140,26 @@ def runit(**kwargs):
 
     msds = get_ds_from_msdsl(ms_dsl, field_id=fieldid, data_desc_id=spwid)
 
-    ms_ds = msds.assign(
-        **{
-            output_column: (
-                ("row", "chan", "corr"),
-                getattr(msds, input_column).data - continuum.data,
-            ),
-        }
-    )
+    dims = ("row", "chan", "corr")
+    output_data = {output_column: (dims,visdata.data - continuum.data)}
+    if opts.cont_output_col:
+        output_data[opts.cont_output_col] = (dims, continuum.data)
+
+    output_columns = list(output_data.keys())
+    ms_ds = msds.assign(**output_data)
 
     if opts.output_ms:
         ms_name = opts.output_ms
-        writes = [xds_to_table(ms_ds, ms_name, columns=["FLAG", "WEIGHT", output_column])]
-        print(f"Writing new MS with FLAG, WEIGHT, and {output_column}")
+        writes = [xds_to_table(ms_ds, ms_name, columns=["FLAG", "WEIGHT", *output_columns])]
+        print(f"Writing new MS with FLAG, WEIGHT, and {output_columns}")
 
     else:
-        writes = [xds_to_table(ms_ds, ms, [output_column])]
-        print(f"Writing line data to column '{output_column}' in {ms}...")
+        writes = [xds_to_table(ms_ds, ms, output_columns)]
+        print(f"Writing line data to column(s) '{output_columns}' in {ms}...")
 
     with TqdmCallback(desc="Writing line data to MS"):
         da.compute(writes)
-    print(f"UV plane continuum subtraction completed. Data written to column '{output_column}' in {ms}.")
+    print(f"UV plane continuum subtraction completed. Data written to column(s) '{output_columns}' in {ms}.")
 
     # DONE
     dtime = time.time() - start_time

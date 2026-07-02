@@ -11,10 +11,16 @@ inputs:
         info: Column which contains the data to be continuum subtracted.
         dtype: str
         default: DATA 
+  model-column:
+        info: Column which contains the model data to be subtracted from the input column before continuum subtraction.
+        dtype: str
   output-column:
         info: Column name to write the continuum subtracted data to
         dtype: str
-        default: LINE_DATA  
+        default: LINE_DATA 
+  cont-output-col:
+        info: Column name to write the continuum model to
+        dtype: str
   fit-model:
         info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
         dtype: str
