@@ -72,18 +72,36 @@ class FitFunc:
     def fit(self, x, data, mask, weight):
         pass
 
-    def default_prepare(self):
+    def resolve_chanwidth(self):
+        """Return the channel width implied by velwidth"""
+        
         if self.velwidth:
-            self.chanwidth = utils.chans_in_velwidth(self.freqs * 1e6, self.velwidth * 1000)
+            chanwidth = utils.chans_in_velwidth(self.freqs * 1e6, self.velwidth * 1000)
+        elif self.chanwidth is not None:
+            chanwidth = self.chanwidth
+        else:
+            raise RuntimeError("Neither chanwidth nor velwidth are set. Cannot proceed.")
+        if chanwidth % 2 == 0:
+            chanwidth += 1
+        return chanwidth
+    
+    def default_prepare(self):
+        self.chanwidth = self.resolve_chanwidth()
+        if self.velwidth:
             log.info(f"Velocity of {self.velwidth} km/s corresponds to {self.chanwidth} channels")
-        elif self.chanwidth is None:
-            raise RuntimeError("Neither chanwidth or velwitdth are set. Cannot proceed.")
-
-        if self.chanwidth % 2 == 0:
-            self.chanwidth += 1
-
         self.preped = True
+        
+    def validate(self, min_chanwidth=3):
 
+        if not self.velwidth and self.chanwidth is None:
+            return  # this fitter doesn't use a channel window (e.g. polynomial, GCV)
+        chanwidth = self.resolve_chanwidth()
+        if chanwidth < min_chanwidth:
+            raise BadFitError(
+                f"Velocity width of {self.velwidth} km/s resolves to {chanwidth} channel(s), "
+                f"your channel width is too coarse. Minimum number of channels required for the fit is {min_chanwidth} "
+                f"channels. Increase the velocity width."
+            )
 
 class FitBSpline(FitFunc):
     """
@@ -143,8 +161,8 @@ class FitBSpline(FitFunc):
                 )
             else:
                 splCfs = splrep(x_masked, data_masked, task=-1, t=knot_positions, k=self.order)
-        except Exception as exc:
-            raise BadFitError(f"B-spline fit failed: {exc}") from exc
+        except Exception:
+            raise BadFitError(f"B-spline fit failed")
 
         return splev(self.freqs, splCfs)
 

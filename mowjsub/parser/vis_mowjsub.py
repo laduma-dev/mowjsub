@@ -19,6 +19,8 @@ from mowjsub import BIN
 from mowjsub.fitfuncs import FitBSpline, FitGCVSpline, FitMedFilter, FitMedFilterFast, FitPolynomial
 from mowjsub.utils import get_ds_from_msdsl, ms_to_xarray_dataset
 from mowjsub.visibility_plane import VisContSub
+from mowjsub.exceptions import BadFitError
+
 
 log = init_logger(BIN.vis_plane)
 
@@ -73,7 +75,6 @@ def runit(**kwargs):
     ds = xr.open_zarr(temp_zarr, chunks=outchunks)
 
     xspec = np.asarray(ds.coords["FREQ"])
-
     futures = []
 
     if method in ["spline", "b-spline"]:
@@ -94,6 +95,10 @@ def runit(**kwargs):
     base_dims = "TIME, BASELINE, FREQ, CORR"
     signature = f"({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
     meta = (np.ndarray((), ds.VIS.dtype),)
+    try:
+        fitfunc.validate()     
+    except BadFitError as e:
+        raise click.ClickException(str(e)) from None
 
     dask.config.set(scheduler="threads", num_workers=nworkers)
 
