@@ -18,6 +18,7 @@ from mowjsub.fitfuncs import (
     FitBSpline,
     FitGCVSpline,
     FitMedFilter,
+    FitMedFilterFast,
     FitPolynomial,
 )
 from mowjsub.image_plane import ContSub
@@ -61,11 +62,17 @@ def runit(**kwargs):
     if opts.fit_model in "spline polynomial dct".split() and getattr(opts, "order", None) is None:
         raise RuntimeError(f"The parameter 'order' is required for fit-model={opts.fit_model}.")
 
-    if opts.fit_model in "spline median-filter dct".split() and getattr(opts, "vel_width", None) is None:
+    if opts.fit_model in "spline median-filter scipy-median-filter dct".split() and getattr(opts, "vel_width", None) is None:
         raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={opts.fit_model}.")
 
     velwidth = opts.vel_width or opts.segments
-    chunks = dict(ra=opts.ra_chunks or 64, dec=None, spectral=None)
+
+    if opts.ra_chunks < 0:
+        raise RuntimeError("The parameter 'ra-chunks' cannot be negative. Set it to zero to disable chunking.")
+
+    ra_chunks = opts.ra_chunks
+    # Zero disables chunking, i.e. the RA axis is read as a single block.
+    chunks = dict(ra=ra_chunks or -1, dec=None, spectral=None)
 
     rest_freq = opts.rest_freq
     zds = zds_from_fits(
@@ -113,9 +120,14 @@ def runit(**kwargs):
     elif opts.fit_model == "median-filter":
         fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
         fitfunc.prepare()
+    elif opts.fit_model == "scipy-median-filter":
+        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
+        fitfunc.prepare()
     elif opts.fit_model == "gcv-spline":
         fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=opts.cont_fit_tol)
         fitfunc.prepare()
+    else:
+        raise RuntimeError(f"Unsupported fit-model: {opts.fit_model!r}.")
 
     get_mask = da.gufunc(
         lambda _data: get_automask(_data, fitfunc, opts.sigma_clip),
@@ -162,7 +174,7 @@ def runit(**kwargs):
         infits.PATH,
         outcont.PATH,
         hdu_idx=opts.hdu_index,
-        chunks={0: opts.ra_chunks, 1: None, 2: None},
+        ra_chunks=ra_chunks,
     )
     log.info(f"Writing residual data (line cube) to: {outline}")
     out_ds_line.writeto(outline.PATH, overwrite=opts.overwrite)

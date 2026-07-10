@@ -16,7 +16,13 @@ from tqdm.dask import TqdmCallback
 
 import mowjsub
 from mowjsub import BIN
-from mowjsub.fitfuncs import FitBSpline, FitPolynomial
+from mowjsub.fitfuncs import (
+    FitBSpline,
+    FitGCVSpline,
+    FitMedFilter,
+    FitMedFilterFast,
+    FitPolynomial,
+)
 from mowjsub.utils import get_ds_from_msdsl, ms_to_xarray_dataset
 from mowjsub.visibility_plane import VisContSub
 
@@ -43,8 +49,14 @@ def runit(**kwargs):
     chunksize = opts.row_chunks
     velwidth = opts.vel_width or opts.segments
     method = opts.fit_model
-    order = opts.order[0]
+    order = opts.order
     nworkers = opts.nworkers
+
+    if method in ("spline", "b-spline", "polynomial") and order is None:
+        raise RuntimeError(f"The parameter 'order' is required for fit-model={method}.")
+
+    if method in ("spline", "b-spline", "median-filter", "scipy-median-filter") and velwidth is None:
+        raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={method}.")
     outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
     input_column = opts.input_column
     output_column = opts.output_column
@@ -63,12 +75,20 @@ def runit(**kwargs):
 
     futures = []
 
-    if method == "spline":
+    if method in ("spline", "b-spline"):
         fitfunc = FitBSpline(xspec, order=order, velwidth=velwidth, fit_tol=cont_tol)
     elif method == "polynomial":
         fitfunc = FitPolynomial(xspec, order=order, fit_tol=cont_tol)
+    elif method == "median-filter":
+        fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=cont_tol)
+    elif method == "scipy-median-filter":
+        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, fit_tol=cont_tol)
+    elif method == "gcv-spline":
+        fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=cont_tol)
     else:
-        raise ValueError(f"Unknown fitting method: {method}. Supported methods: 'spline', 'polynomial'.")
+        raise ValueError(f"Unknown fitting method: {method}.")
+
+    fitfunc.prepare()
 
     base_dims = "TIME, BASELINE, FREQ, CORR"
     signature = f"({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
