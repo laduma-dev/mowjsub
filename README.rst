@@ -31,7 +31,7 @@ Latest (in development)
 
 
 Using uv (Recommended development install)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 The package requires Python >=3.11, so uv is the recommended way to install
 from a local clone. If you do not have `uv <https://docs.astral.sh/uv/>`_ installed, install it first:
 

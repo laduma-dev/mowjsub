@@ -28,20 +28,22 @@ dependencies = [
 im-mowjsub = "mowjsub.parser.im_mowjsub:runit"
 vis-mowjsub = "mowjsub.parser.vis_mowjsub:runit"
 
-[dependency-groups]
-dev = [
-	"jupyter",
-	"matplotlib",
-]
 
+[dependency-groups]
 ruff = [
     "pre-commit>=4.3.0",
     "ruff>=0.12.9",
 ]
 
+dev = [
+	"jupyter",
+	"matplotlib",
+    {include-group = "ruff"},
+]
+
 tests = [
 	"pytest==8.4.1",
-    {include-group = "ruff"}
+    {include-group = "ruff"},
     ]
 
 docs = [

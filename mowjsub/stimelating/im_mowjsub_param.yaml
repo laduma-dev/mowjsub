@@ -22,7 +22,7 @@ automask-per-iter:
   dtype: bool
   default: False
 fit-model:
-  info: "Fit function to model the continuum. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
+  info: "Fit function to model the continuum. The 'scipy-median-filter' model is much faster than 'median-filter', but treats band edges and masked channels differently, so the two do not give identical continuum models. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
   dtype: str
   choices:
     - b-spline
@@ -78,7 +78,7 @@ ra-chunks:
   dtype: int 
   default: 64
 nworkers:
-  info: Number of workers (one per CPU)
+  info: "Number of parallel worker threads (roughly one per CPU core). Runtime for fitting-bound models scales with this, so raise it to speed up large cubes."
   dtype: int
   default: 4
 loglevel:

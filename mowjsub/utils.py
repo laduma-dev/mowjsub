@@ -123,17 +123,24 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False
     return ds.chunk(chunks)
 
 
-def subtract_fits(data_file: File, model_file: File, hdu_idx: int, chunks: Dict):
+def subtract_fits(data_file: File, model_file: File, hdu_idx: int, ra_chunks: int = None):
     """Returns the residual of two FITS files as a FitsPrimaryHDU object
 
     Args:
         data_file (File): FITS file of the data
         model_file (File): FITS file of model data
-        chunks (Dict): How to chunk the data
+        hdu_idx (int): FITS HDU index
+        ra_chunks (int): Chunk size along the RA axis. Zero or unset reads the cube as a single chunk.
 
     Returns:
         FitsPrimaryHDU
     """
+
+    # xarrayfits chunk keys are C-order axis indices, and RA is NAXIS1, i.e. the
+    # fastest-varying FITS axis. In C order that is the last axis, whatever the
+    # cube's dimensionality. Unlisted axes are read as a single chunk.
+    ndim = fitsio.getheader(data_file, hdu_idx)["NAXIS"]
+    chunks = {ndim - 1: ra_chunks} if ra_chunks else {}
 
     data_ds = xds_from_fits(data_file, hdus=hdu_idx, chunks=chunks)[0]
     model_ds = xds_from_fits(model_file, hdus=hdu_idx, chunks=chunks)[0]

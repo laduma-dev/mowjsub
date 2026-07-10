@@ -45,8 +45,11 @@ class FitFunc:
         Args:
             data (np.ndarray): 1D spectrum
             mask (np.ndarray): Binary mask
+
+        Returns:
+            tuple: A new mask with NaN data points flagged, and the invalid point count.
         """
-        mask[np.isnan(data)] = True
+        mask = mask | np.isnan(data)
 
         return mask, mask.sum()
 
@@ -212,7 +215,7 @@ class FitMedFilter(FitFunc):
             pass
 
         if isinstance(mask, np.ndarray):
-            data[mask] = np.nan
+            data = np.where(mask, np.nan, data)
 
         pad_size = int(self.chanwidth / 2)
         padded_data = np.pad(data, pad_size, mode="linear_ramp")
@@ -246,11 +249,11 @@ class FitMedFilterFast(FitFunc):
 
         mask = self.is_fit_possible(data, mask, raise_exception=True)[0]
 
-        if isinstance(mask, np.ndarray):
-            data[mask] = np.nan
+        # is_fit_possible folds NaN data points into the mask, so masked and
+        # non-finite points are the same set here.
+        nan_mask = mask
 
         # Fill NaNs with nearest value for filtering
-        nan_mask = np.isnan(data)
         if np.any(nan_mask):
             data_filled = np.copy(data)
             data_filled[nan_mask] = np.interp(np.flatnonzero(nan_mask), np.flatnonzero(~nan_mask), data[~nan_mask])
