@@ -62,10 +62,12 @@ def runit(**kwargs):
     if opts.fit_model in ("b-spline", "spline", "polynomial") and getattr(opts, "order", None) is None:
         raise RuntimeError(f"The parameter 'order' is required for fit-model={opts.fit_model}.")
 
-    if opts.fit_model in ("b-spline", "spline", "median-filter", "scipy-median-filter") and getattr(opts, "vel_width", None) is None:
-        raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={opts.fit_model}.")
-
     velwidth = opts.vel_width or opts.segments
+
+    if opts.fit_model in ("b-spline", "spline", "median-filter", "scipy-median-filter") and velwidth is None:
+        raise RuntimeError(
+            f"The parameter 'vel-width' (or legacy 'segments') is required for fit-model={opts.fit_model}."
+        )
 
     if opts.ra_chunks < 0:
         raise RuntimeError("The parameter 'ra-chunks' cannot be negative. Set it to zero to disable chunking.")
