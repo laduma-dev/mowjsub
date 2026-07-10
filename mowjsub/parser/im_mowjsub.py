@@ -4,8 +4,8 @@ import time
 
 import astropy.io.fits as fitsio
 import click
+import dask
 import dask.array as da
-import dask.multiprocessing
 import numpy as np
 from omegaconf import OmegaConf
 from scabha import init_logger
@@ -59,10 +59,10 @@ def runit(**kwargs):
     if opts.overwrite is False and (outcont.EXISTS or outline.EXISTS):
         raise RuntimeError("At least one output file exists, but --no-overwrite has been set. Unset it to proceed.")
 
-    if opts.fit_model in "spline polynomial dct".split() and getattr(opts, "order", None) is None:
+    if opts.fit_model in ("b-spline", "spline", "polynomial") and getattr(opts, "order", None) is None:
         raise RuntimeError(f"The parameter 'order' is required for fit-model={opts.fit_model}.")
 
-    if opts.fit_model in "spline median-filter scipy-median-filter dct".split() and getattr(opts, "vel_width", None) is None:
+    if opts.fit_model in ("b-spline", "spline", "median-filter", "scipy-median-filter") and getattr(opts, "vel_width", None) is None:
         raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={opts.fit_model}.")
 
     velwidth = opts.vel_width or opts.segments

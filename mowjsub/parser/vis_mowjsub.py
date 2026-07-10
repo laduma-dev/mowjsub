@@ -3,8 +3,8 @@ import os
 import time
 
 import click
+import dask
 import dask.array as da
-import dask.multiprocessing
 import numpy as np
 import xarray as xr
 from daskms import xds_from_ms, xds_to_table
