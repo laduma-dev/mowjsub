@@ -19,6 +19,7 @@ from xarrayfits import xds_from_fits
 from mowjsub import BIN
 from mowjsub.doppler import (
     FRAME_CODES,
+    C,
     common_channel_grid,
     doppler_factors,
     grid_frequencies,
@@ -63,19 +64,31 @@ def chans_in_velwidth(freqs: np.ndarray, velwidth: float):
     """
     Calculates the number of channels in given velocity width
 
+    A channel's velocity width is dv = c * df / f, so it varies as 1/f across
+    the band -- 0.4% end to end over a typical L-band cube. The reference
+    frequency is therefore stated explicitly, as the band centre, rather than
+    left implied by whichever channels happen to get sampled.
+
     Args:
-        freqs (np.ndarray): Frequency grid in Hz.
+        freqs (np.ndarray): Frequency grid in Hz. Need not be sorted.
         velwidth (float): Velocity width in m/s
+
+    Returns:
+        int: Channel count, at least 1.
     """
-    speed_c = 2.998e8
-    df_low = np.partition(freqs, 2)[:2]
-    df_high = np.partition(freqs, 2)[-2:]
+    freqs = np.sort(np.asarray(freqs, dtype=float))
 
-    dv_high = np.abs(np.diff(df_low) / np.mean(df_low)) * speed_c
-    dv_low = np.abs(np.diff(df_high) / np.mean(df_high)) * speed_c
-    dv = np.mean([dv_low, dv_high])
+    # Mean spacing rather than a single pair: tolerates the slightly uneven
+    # grids that come out of regridding, and does not depend on which two
+    # channels are picked.
+    df = np.abs(np.diff(freqs)).mean()
+    f_ref = 0.5 * (freqs[0] + freqs[-1])
+    dv = df / f_ref * C
 
-    return int(velwidth / dv)
+    # Round, don't truncate. Truncating biases every conversion downwards by up
+    # to a full channel -- 300 km/s on the test grid lands on 209.82 channels,
+    # which int() turned into 209.
+    return max(1, int(round(velwidth / dv)))
 
 
 def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):

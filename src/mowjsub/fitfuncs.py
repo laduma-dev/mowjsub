@@ -23,12 +23,17 @@ class FitFunc:
         chanwidth: int = None,
         fit_lam: int = None,
         fit_tol: float = 0,
+        seed=None,
     ):
         """
 
         Args:
             order (_type_): _description_
             velwidth (_type_): _description_
+            seed: Seed for fitters that place knots at random offsets. None
+                (the default) draws fresh entropy, so repeated fits of the same
+                spectrum differ slightly. Pass an integer to make a run
+                reproducible.
         """
         self.velwidth = velwidth
         self.fit_tol = fit_tol
@@ -38,6 +43,7 @@ class FitFunc:
         self.preped = False
         self.chanwidth = chanwidth
         self.fit_lam = fit_lam
+        self.seed = seed
 
     def invalid_point_count(self, data: np.ndarray, mask: np.ndarray):
         """Calculates the number of invalid data points in a spectrum.
@@ -99,8 +105,7 @@ class FitBSpline(FitFunc):
         self.max_spline_order = int(self.nchan / self.chanwidth) + 1
         log.info(f"max spline order: {self.max_spline_order}")
 
-        rs = np.random.SeedSequence()
-        self.rng = np.random.default_rng(rs)
+        self.rng = np.random.default_rng(np.random.SeedSequence(self.seed))
         self.preped = True
 
     def fit(self, data: np.ndarray, mask: np.ndarray, weights: np.ndarray):
