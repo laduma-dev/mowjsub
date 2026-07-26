@@ -57,6 +57,8 @@ class TestFitsFunc(unittest.TestCase):
 
         self.velwidth = 300
         self.chanwidth = utils.chans_in_velwidth(freqs * 1e6, self.velwidth * 1e3)
+        # Fixed knot seed, so a fit is reproducible within a test.
+        self.seed = 20260726
 
     def test_median_filter(self):
         baseline_func = FitMedFilter(self.freqs, velwidth=self.velwidth)
@@ -82,11 +84,16 @@ class TestFitsFunc(unittest.TestCase):
         assert baseline.shape == self.data.shape
 
     def test_b_spline(self):
-        baseline_func = FitBSpline(self.freqs, order=3, velwidth=self.velwidth)
+        # Both fitters get the same seed. FitBSpline jitters its knots by up to
+        # +/-25 channels, so without this the two fits differ by knot placement
+        # rather than by anything the test is asking about -- which is what kept
+        # pushing this tolerance up: the residual MAD ran to ~0.05 on ~8% of
+        # datasets, failing whichever CI matrix entry drew one.
+        baseline_func = FitBSpline(self.freqs, order=3, velwidth=self.velwidth, seed=self.seed)
         baseline_vel = baseline_func.fit(self.data, mask=self.mask, weights=None)
 
         # test if chanwidth gives same result as velwidth
-        baseline_func = FitBSpline(self.freqs, order=3, chanwidth=self.chanwidth)
+        baseline_func = FitBSpline(self.freqs, order=3, chanwidth=self.chanwidth, seed=self.seed)
         baseline_chan = baseline_func.fit(self.data, mask=self.mask, weights=None)
 
         assert baseline_chan.shape == self.data.shape
@@ -95,7 +102,11 @@ class TestFitsFunc(unittest.TestCase):
         resid_median = np.median(resid)
         mad = np.median(np.abs(resid - resid_median))
 
-        assert mad < 5e-2
+        # With knots held fixed the two paths must agree exactly: velwidth is
+        # converted by the same `chans_in_velwidth` the test used to derive
+        # chanwidth, so this is an equality check, not a tolerance.
+        np.testing.assert_array_equal(baseline_chan, baseline_vel)
+        assert mad == 0.0
 
     def test_gcv_spline(self):
         baseline_func = FitGCVSpline(self.freqs)

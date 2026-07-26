@@ -37,6 +37,29 @@ project's former name, **contsub**.
 
 ### Fixed
 
+- **`chans_in_velwidth` reference frequency and rounding.** A channel's velocity
+  width is `dv = c·df/f`, so it varies as 1/f across the band; the reference
+  frequency is now stated explicitly as the band centre instead of being implied
+  by an average of two edge estimates. Three real defects went with that: the
+  upper edge was selected with `np.partition(freqs, 2)[-2:]`, which does **not**
+  return the two largest elements (partition only guarantees position `kth`) and
+  silently picked arbitrary channels on any grid that was not already sorted;
+  the channel count was truncated with `int()` rather than rounded, biasing every
+  conversion downwards by up to a full channel; and `c` was the rounded
+  `2.998e8` instead of the exact value already defined in `doppler.py`.
+
+  **This changes results.** On a 1000-channel L-band grid, 300 km/s now converts
+  to 210 channels where it previously gave 209 (the true value is 209.82).
+  Continuum fits using `--velwidth` will differ slightly from 2.0rc1.
+- **`test_b_spline`'s flaky tolerance.** `FitBSpline` jitters its knots by up to
+  ±25 channels, and the test compared two independently-seeded fitters, so the
+  assertion was measuring knot placement rather than the velwidth/chanwidth
+  equivalence it claimed to test. The residual MAD reached ~0.05 on roughly 8%
+  of datasets, which is why the tolerance had been raised repeatedly. `FitFunc`
+  now takes an optional `seed`; with knots held fixed the two paths agree
+  *exactly*, so the test asserts equality instead of a tolerance. Verified over
+  40 fresh random datasets. Default behaviour is unchanged — `seed=None` still
+  draws fresh entropy.
 - **Image-plane out-of-memory failures**, along with fitters that mutated their
   input arrays. The median-filter options are now wired through to the CLI.
 - Dead DCT references and stale parser imports removed; the `nworkers`
