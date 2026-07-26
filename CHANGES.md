@@ -79,6 +79,11 @@ project's former name, **contsub**.
   `latest`, ignores the lock and resolves fresh on a weekly schedule; it is the
   intended early warning for a new astropy/dask/numpy breaking the package, and
   does not gate pushes.
+- **Dependabot configured** (`.github/dependabot.yml`) for the `uv` and
+  `github-actions` ecosystems — weekly and monthly respectively. Dev tooling and
+  routine runtime bumps are grouped; runtime major bumps are left individual, so
+  an astropy or dask major arrives as its own reviewable PR. This only became
+  useful once `uv.lock` was tracked.
 - **`pip-audit` added to CI and to the pre-commit hook.** CI runs it on every
   matrix entry, against the tree actually installed and before a PR merges,
   which Dependabot (default branch, ingested advisories only) does not cover.

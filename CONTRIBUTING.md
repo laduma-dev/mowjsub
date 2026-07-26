@@ -145,6 +145,20 @@ When an advisory lands, the fix is normally to raise the floor on the affected
 package in `pyproject.toml` (not to pin an exact version, which is what made the
 pytest advisory linger), then `uv lock && uv sync`.
 
+Three things watch dependencies here, and they cover different gaps:
+
+| | what it catches |
+|---|---|
+| `pip-audit` in CI and the hook | advisories against the tree actually installed, on a PR, before merge |
+| Dependabot (`.github/dependabot.yml`) | advisories and routine version bumps, as PRs, on the default branch |
+| the `latest` CI job | upstream releases that break us but have no advisory at all |
+
+Dependabot raises weekly `uv` PRs (monthly for Actions), batching dev tooling
+and routine runtime bumps into groups. Runtime **major** bumps are deliberately
+left ungrouped: an astropy, dask or casacore major is exactly the change that
+wants its own PR and its own test run. It updates `pyproject.toml` and `uv.lock`
+together, so its PRs satisfy `uv sync --locked`.
+
 ## Documentation
 
 Docs are built with Sphinx (Furo theme) and hosted on Read the Docs:
