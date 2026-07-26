@@ -123,8 +123,9 @@ ipython_config.py
 .pdm.toml
 
 # uv
-#   Intentionally not tracking the resolved lock file for this project.
-uv.lock
+#   uv.lock IS tracked -- see CONTRIBUTING.md. It is never read by anyone
+#   installing mowjsub (pip resolves from [project.dependencies]); tracking it
+#   is what makes dev environments and CI reproducible.
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/

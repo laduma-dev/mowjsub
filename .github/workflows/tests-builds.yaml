@@ -3,9 +3,18 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Weekly, so upstream drift and newly published advisories surface without
+  # waiting for someone to commit. See the `latest` job below.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 jobs:
+  # Reproducible: installs exactly what uv.lock pins. `--locked` additionally
+  # fails if the lock is out of step with pyproject.toml, which catches a
+  # dependency edit that was committed without `uv lock`.
   build:
+    if: github.event_name != 'schedule'
 
     runs-on: ubuntu-latest
     strategy:
@@ -20,14 +29,46 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install package
-      run: uv sync --group dev
+      run: uv sync --locked
     - name: Lint with ruff
       run: uv run ruff check src/mowjsub/
     - name: CI tests
       run: uv run pytest
-    # uv.lock is untracked, so Dependabot only ever sees pyproject.toml's loose
-    # constraints and cannot alert on the transitive tree. This is the check that
-    # actually covers it. Runs per matrix entry because resolution differs by
-    # Python version.
+    # Dependabot covers uv.lock, but only for advisories it has ingested and
+    # only on the default branch. This runs against the tree actually installed
+    # here, per matrix entry, since resolution differs by Python version.
+    - name: Audit dependencies
+      run: uv run --with pip-audit python -m pip_audit --progress-spinner off --skip-editable
+
+  # The other half of pinning the lock: with `build` reproducible, nothing would
+  # otherwise notice that a new astropy/dask/numpy breaks us until a contributor
+  # relocked and hit it. This job deliberately ignores the lock and resolves
+  # fresh. It is expected to be the one that goes red first on upstream changes,
+  # so it does not gate pushes -- it runs on the weekly schedule and on demand.
+  latest:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Resolve latest compatible dependencies
+      run: uv lock --upgrade
+    - name: Install package
+      run: uv sync
+    - name: Show what changed against the committed lock
+      run: git --no-pager diff --stat -- uv.lock
+    - name: Lint with ruff
+      run: uv run ruff check src/mowjsub/
+    - name: CI tests
+      run: uv run pytest
     - name: Audit dependencies
       run: uv run --with pip-audit python -m pip_audit --progress-spinner off --skip-editable

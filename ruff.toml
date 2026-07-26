@@ -12,9 +12,10 @@ target-version = "py311"
 # grown, so the same three lines silently came to mean something else entirely:
 # under ruff 0.16, `ruff check src/mowjsub/` began reporting 24 violations
 # (DTZ005, BLE001, RUF013, C408, B006, UP035) across files nobody had touched.
-# Since uv.lock is not tracked, CI resolves whatever ruff is newest, so this
-# arrived on its own. Pinning the set explicitly is what stops a future ruff
-# release from redefining this config's intent again.
+# uv.lock was untracked at the time, so CI resolved whatever ruff was newest and
+# this arrived on its own. The lock is tracked now, but pinning the set
+# explicitly is still what stops a future ruff bump from redefining this
+# config's intent -- a lock only delays that until someone relocks.
 #
 # Adopting a broader ruleset is a fine thing to decide -- but it should be
 # decided, not inherited from a dependency bump. Add rules here deliberately.

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-This project uses `uv` for dependency management (a `uv.lock` is present). A `.venv` is already set up at `.venv/`.
+This project uses `uv` for dependency management, with a tracked `uv.lock`. A `.venv` is already set up at `.venv/`.
 
 ```bash
 # Install with dev/test dependencies (`dev` is uv's default group)
@@ -42,7 +42,7 @@ When the commit includes `pyproject.toml`, the hook also runs `pip-audit` over t
 
 Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort enabled. The rule set is pinned with `select` rather than `extend-select`, deliberately — see the comment in that file before widening it.
 
-`uv.lock` is intentionally untracked, which is why `pip-audit` exists here: Dependabot can only see `pyproject.toml`'s loose constraints and cannot alert on the resolved transitive tree.
+`uv.lock` is tracked. After changing `pyproject.toml` always run `uv lock && uv sync` and commit the lock — CI's `build` job installs with `uv sync --locked` and fails if the two disagree. A second CI job, `latest`, ignores the lock and resolves fresh on a weekly schedule; it is the intended early warning for upstream releases breaking us, so a red `latest` is not necessarily a red branch.
 
 ## Architecture
 

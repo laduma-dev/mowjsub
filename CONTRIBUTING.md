@@ -83,10 +83,14 @@ commits pay nothing for it.
 
 `git commit --no-verify` bypasses it when you genuinely need to.
 
-Note `uv.lock` is **not** committed (see `.gitignore`), so a fresh clone
-resolves whatever is current at that moment. **Always `uv lock && uv sync` after
-changing `pyproject.toml`**, so a stale environment doesn't hide a resolution
-problem that CI will hit.
+`uv.lock` **is** committed, so `uv sync` gives you the same versions as everyone
+else and as CI. **Always `uv lock && uv sync` after changing `pyproject.toml`,
+and commit the resulting lock** — CI installs with `uv sync --locked`, which
+fails if the two are out of step.
+
+The lock is never read by anyone *installing* mowjsub: both PyPI and
+`pip install git+…` resolve from `[project.dependencies]`. It exists purely to
+make this repo's own environments reproducible.
 
 **Always run tests through `uv run`.** A bare `pytest` picks up the system
 interpreter, and since `pyproject.toml` sets `pythonpath = ["src"]` it gets far
@@ -128,11 +132,10 @@ you changed `doppler.py`.
 uv run --with pip-audit python -m pip_audit --skip-editable
 ```
 
-This is the project's real check on transitive dependencies, and CI runs it on
-every push across the whole matrix. The reason it matters: `uv.lock` is
-untracked, so GitHub's Dependabot only ever sees the loose constraints in
-`pyproject.toml` and cannot alert on the resolved tree at all. Nothing else
-covers it.
+CI runs this on every push across the whole matrix. Dependabot also watches
+`uv.lock` now that it is tracked, but only for advisories it has ingested and
+only on the default branch — `pip-audit` checks the tree that is actually
+installed, on a PR, before it merges.
 
 `--skip-editable` skips mowjsub itself, which is not on PyPI and has no
 advisories to look up. Don't add `--strict` — it would turn that skip into an
@@ -160,8 +163,14 @@ that group is the single source of truth.
 1. Branch off `main` and keep PRs **small and focused**.
 2. Make sure `uv run pytest` and `uv run ruff check src/mowjsub/` pass locally
    before opening a PR. CI (`.github/workflows/tests-builds.yaml`) runs those
-   plus `pip-audit` across Python 3.11, 3.12 and 3.13.
-3. Push and open a PR against `main`. Reference any related issue.
+   plus `pip-audit` across Python 3.11, 3.12 and 3.13, installing from the
+   committed lock.
+3. A second CI job, `latest`, ignores the lock and resolves fresh. It runs
+   weekly rather than on pushes, because it is the one expected to go red first
+   when an upstream release breaks us — that is a signal about the ecosystem,
+   not about your PR. If it is already failing, don't assume your branch caused
+   it.
+4. Push and open a PR against `main`. Reference any related issue.
 
 ### Commit messages
 

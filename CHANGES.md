@@ -65,12 +65,25 @@ project's former name, **contsub**.
 - **`pytest` raised to `>=9.0.3,<10`** for GHSA-6w46-j5rx-g56g (tmpdir
   handling) — a floor rather than the previous exact `==8.4.1` pin, so the next
   advisory fix does not need a pyproject edit.
-- **`pip-audit` added to CI and to the pre-commit hook.** Since `uv.lock` is
-  untracked, Dependabot only ever sees `pyproject.toml`'s loose constraints and
-  cannot alert on the resolved transitive tree; this is the check that covers
-  it. CI runs it on every matrix entry; the hook runs it only when the commit
-  includes `pyproject.toml`, and does not block when pip-audit itself fails to
-  run.
+- **`uv.lock` is now tracked**, reversing the earlier decision to ignore it. The
+  lock is never read by anyone installing mowjsub — PyPI and
+  `pip install git+…` both resolve from `[project.dependencies]` — so this only
+  affects this repo's own environments, where it buys reproducible dev setups
+  and a CI that cannot change behaviour without a commit. That had already cost
+  something: ruff 0.16 turned CI's lint step red with no code change, because
+  each run re-resolved from scratch.
+
+  CI's `build` job installs with `uv sync --locked`, which also fails when
+  `pyproject.toml` and the lock disagree. Because pinning the lock would
+  otherwise hide upstream breakage until someone relocked, a second job,
+  `latest`, ignores the lock and resolves fresh on a weekly schedule; it is the
+  intended early warning for a new astropy/dask/numpy breaking the package, and
+  does not gate pushes.
+- **`pip-audit` added to CI and to the pre-commit hook.** CI runs it on every
+  matrix entry, against the tree actually installed and before a PR merges,
+  which Dependabot (default branch, ingested advisories only) does not cover.
+  The hook runs it only when the commit includes `pyproject.toml`, and does not
+  block when pip-audit itself fails to run.
 - Added `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CITATION.cff`
   and this changelog.
 
