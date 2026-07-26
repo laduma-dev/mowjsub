@@ -69,7 +69,7 @@ docs = [
 	"sphinx-copybutton",
 	"furo",
 	"sphinx-rtd-theme",
-	"sphinx_click==6.0.0",
+	"sphinx_click==6.2.0",
 ]
 
 [build-system]
