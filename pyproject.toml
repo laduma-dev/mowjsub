@@ -56,7 +56,9 @@ vis-mowjsub = "mowjsub.parser.vis_mowjsub:runit"
 # ruff rather than fetching its own.
 dev = [
     "ruff>=0.12.9",
-    "pytest==8.4.1",
+    # >=9.0.3 for GHSA-6w46-j5rx-g56g (tmpdir handling). A floor rather than an
+    # exact pin, so a future advisory fix does not need a pyproject edit.
+    "pytest>=9.0.3,<10",
 #	"jupyter",
 #	"matplotlib",
 ]
