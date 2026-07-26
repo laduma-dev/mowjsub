@@ -7,14 +7,24 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 from astropy import units
+from astropy.coordinates import EarthLocation
 from astropy.wcs import WCS
-from daskms import xds_from_ms, xds_from_table
+from casacore.tables import table
+from daskms import Dataset, xds_from_ms, xds_from_table
 from scabha import init_logger
 from scabha.basetypes import File
 from tqdm.dask import TqdmCallback
 from xarrayfits import xds_from_fits
 
 from mowjsub import BIN
+from mowjsub.doppler import (
+    FRAME_CODES,
+    common_channel_grid,
+    doppler_factors,
+    grid_frequencies,
+    parse_channel_grid,
+    regrid_rows,
+)
 from mowjsub.image_plane import ContSub
 from mowjsub.masking import Mask, PixSigmaClip
 
@@ -266,6 +276,286 @@ def get_ds_from_msdsl(ms_dsl, field_id=0, data_desc_id=0):
         return ds
     else:
         raise ValueError(f"Dataset with FIELD_ID={field_id} and DATA_DESC_ID={data_desc_id} not found in the MS.")
+
+
+def observatory_location(ms_path):
+    """Array reference position of an MS, as the centroid of its antennas.
+
+    Args:
+        ms_path (str|File): Measurement Set.
+
+    Returns:
+        EarthLocation: Array centre, from ``ANTENNA::POSITION`` (ITRF metres).
+    """
+    positions = xds_from_table(f"{ms_path}::ANTENNA")[0].POSITION.values
+    centre = np.asarray(positions, dtype=float).mean(axis=0)
+
+    return EarthLocation.from_geocentric(*centre, unit=units.m)
+
+
+def source_systemic_velocity(ms_path, field_id=0):
+    """Systemic radial velocity of a field, if the MS records one.
+
+    Args:
+        ms_path (str|File): Measurement Set.
+        field_id (int): Field to look up.
+
+    Returns:
+        float|None: Velocity in m/s (positive for recession), or None when the
+        MS has no SOURCE table, no SYSVEL column, or no matching source.
+    """
+    try:
+        field = xds_from_table(f"{ms_path}::FIELD")[0]
+        source_id = int(np.asarray(field.SOURCE_ID.values)[field_id])
+        source = xds_from_table(f"{ms_path}::SOURCE")[0]
+    except Exception:
+        return None
+
+    if "SYSVEL" not in source.data_vars:
+        return None
+
+    ids = np.asarray(source.SOURCE_ID.values)
+    matches = np.flatnonzero(ids == source_id)
+    if matches.size == 0:
+        return None
+
+    sysvel = np.atleast_1d(np.asarray(source.SYSVEL.values)[matches[0]])
+    if sysvel.size == 0 or not np.isfinite(sysvel[0]):
+        return None
+
+    return float(sysvel[0])
+
+
+#: Main-table columns that are per-channel and so cannot be carried across a
+#: regrid unchanged. Everything else is copied to the output MS as it stands.
+CHANNEL_COLUMNS = frozenset(
+    {
+        "DATA",
+        "CORRECTED_DATA",
+        "MODEL_DATA",
+        "FLAG",
+        "FLAG_CATEGORY",
+        "WEIGHT_SPECTRUM",
+        "SIGMA_SPECTRUM",
+    }
+)
+
+
+def output_ms_dataset(msds, columns, spw_id, field_id):
+    """Assemble a dataset describing a complete new MS main table.
+
+    ``xds_to_table`` writes exactly the columns it is given, so anything omitted
+    here is simply absent from the output MS. This carries every row-shaped
+    column of the input across unchanged and restores the two grouping columns,
+    leaving the caller to supply the per-channel ones.
+
+    Args:
+        msds (Dataset): dask-ms dataset for the field and spectral window being
+            processed.
+        columns (dict): Per-channel columns to write, as
+            ``{name: (dims, dask_array)}``. These take precedence over anything
+            of the same name in ``msds``.
+        spw_id (int): Spectral window being processed.
+        field_id (int): Field being processed.
+
+    Returns:
+        Dataset: Ready for ``xds_to_table(..., columns="ALL")``.
+    """
+    nrow = msds.TIME.shape[0]
+    row_chunks = msds.TIME.data.chunks[0]
+
+    variables = dict(columns)
+    # dask-ms groups on these, so they arrive as attrs rather than columns and
+    # would otherwise be missing from the output.
+    variables.setdefault("FIELD_ID", (("row",), da.full(nrow, field_id, chunks=row_chunks, dtype=np.int32)))
+    variables.setdefault("DATA_DESC_ID", (("row",), da.full(nrow, spw_id, chunks=row_chunks, dtype=np.int32)))
+
+    for name, var in msds.data_vars.items():
+        if name in CHANNEL_COLUMNS or name in variables or "chan" in var.dims:
+            continue
+        variables[name] = (var.dims, var.data)
+
+    return Dataset(variables)
+
+
+def copy_ms_subtables(input_ms, output_ms):
+    """Copy an MS's subtables onto a freshly written main table.
+
+    ``xds_to_table`` produces the main table columns but none of the subtables
+    that make the result a readable MS, so they are copied over wholesale.
+
+    Args:
+        input_ms (str|File): MS the subtables are copied from.
+        output_ms (str|File): MS to attach them to.
+    """
+    input_ms, output_ms = str(input_ms), str(output_ms)
+
+    # Every open below asks for automatic locking. The casacore default is user
+    # locking, under which these tables arrive unlocked -- via dask-ms's table
+    # cache for the output, via the parent table for a subtable -- and both
+    # copy() and putkeyword() then refuse to proceed.
+    with table(input_ms, ack=False, lockoptions="auto") as source:
+        keywords = source.getkeywords()
+
+    with table(output_ms, readonly=False, ack=False, lockoptions="auto") as dest:
+        for name, value in keywords.items():
+            # Subtables appear as keywords of the form "Table: /path/to/sub".
+            if not (isinstance(value, str) and value.startswith("Table:")):
+                continue
+            subtable = value.split("Table:", 1)[1].strip()
+            copied = f"{output_ms}/{name}"
+            with table(subtable, ack=False, lockoptions="auto") as sub:
+                # copy() hands back an open handle to the new table. Left
+                # dangling it stays in casacore's cache read-only, and any later
+                # rewrite of that subtable would be refused.
+                sub.copy(copied, deep=True, valuecopy=True).close()
+            dest.putkeyword(name, f"Table: {copied}")
+
+        dest.putkeyword("MS_VERSION", keywords.get("MS_VERSION", 2.0))
+
+
+def _regrid_block(data, flags, weights, times, utimes, ufactors, freqs_in, freqs_out, interpolation):
+    """Regrid one row block, looking each row's Doppler factor up by timestamp."""
+    factors = ufactors[np.clip(np.searchsorted(utimes, times), 0, ufactors.size - 1)]
+
+    return regrid_rows(data, flags, weights, factors, freqs_in, freqs_out, interpolation)
+
+
+def doppler_regrid_dataset(
+    msds,
+    ms_path,
+    line_data,
+    output_column,
+    spw_id,
+    field_id,
+    frame,
+    chan_grid="auto",
+    interpolation="nearest",
+    source_vel=None,
+):
+    """Resample continuum-subtracted visibilities onto a Doppler-corrected grid.
+
+    Args:
+        msds (Dataset): dask-ms dataset for the field and spectral window being
+            processed, supplying the row metadata carried into the output.
+        ms_path (str|File): Input MS, read for its channel frequencies, phase
+            centre and antenna positions.
+        line_data (dask.array): Continuum-subtracted visibilities on the input
+            channel grid, shape ``(row, chan, corr)``.
+        output_column (str): Column the regridded line data is written to.
+        spw_id (int): Spectral window being processed.
+        field_id (int): Field being processed.
+        frame (str): Target spectral frame, one of :data:`mowjsub.doppler.FRAMES`.
+        chan_grid (str): ``'auto'`` or an explicit ``'nchan,chan0,chanwidth'``.
+        interpolation (str): ``'nearest'`` or ``'linear'``.
+        source_vel (float, optional): Source systemic velocity in m/s, for
+            ``frame='source'``. Falls back to ``SOURCE::SYSVEL``.
+
+    Returns:
+        tuple: ``(dataset, freqs_out, chanwidth)`` ready for ``xds_to_table``.
+    """
+    spw = xds_from_table(f"{ms_path}::SPECTRAL_WINDOW")[0]
+    field = xds_from_table(f"{ms_path}::FIELD")[0]
+
+    freqs_in = np.asarray(spw.CHAN_FREQ.values[spw_id], dtype=float)
+    phase_centre = np.asarray(field.PHASE_DIR.values[field_id], dtype=float)[0]
+    location = observatory_location(ms_path)
+
+    if frame == "source" and source_vel is None:
+        source_vel = source_systemic_velocity(ms_path, field_id)
+        if source_vel is None:
+            raise RuntimeError("--doppler-frame=source needs a systemic velocity, but this MS has no usable SOURCE::SYSVEL. Pass --doppler-source-vel.")
+        log.info(f"Using SOURCE::SYSVEL = {source_vel / 1e3:.3f} km/s for the source-frame correction")
+
+    # One factor per timestamp; every baseline and correlation at that timestamp
+    # shares it, so the channel map is built once per distinct time.
+    times = np.asarray(msds.TIME.data)
+    utimes = np.unique(times)
+    ufactors = doppler_factors(utimes, tuple(phase_centre), location, frame, source_vel=source_vel)
+
+    drift = (ufactors.max() - ufactors.min()) * 299792458.0
+    log.info(f"Doppler correction to {frame.upper()}: line-of-sight velocity drifts by {drift:.3f} m/s over the observation")
+
+    if str(chan_grid).lower() == "auto":
+        nchan, chan0, chanwidth = common_channel_grid(freqs_in, ufactors)
+        log.info(f"Derived a common {frame.upper()} channel grid: {nchan} channels from {chan0 / 1e6:.4f} MHz in steps of {chanwidth / 1e3:.4f} kHz")
+    else:
+        nchan, chan0, chanwidth = parse_channel_grid(chan_grid)
+        log.info(f"Using the requested {frame.upper()} channel grid: {nchan} channels from {chan0 / 1e6:.4f} MHz in steps of {chanwidth / 1e3:.4f} kHz")
+
+    freqs_out = grid_frequencies(nchan, chan0, chanwidth)
+
+    # blockwise yields one tuple per block; map_blocks then unpacks the three
+    # regridded arrays without recomputing the fit.
+    regridded = da.blockwise(
+        _regrid_block,
+        "rco",
+        line_data,
+        "rio",
+        msds.FLAG.data,
+        "rio",
+        msds.WEIGHT_SPECTRUM.data,
+        "rio",
+        msds.TIME.data,
+        "r",
+        utimes=utimes,
+        ufactors=ufactors,
+        freqs_in=freqs_in,
+        freqs_out=freqs_out,
+        interpolation=interpolation,
+        dtype=object,
+        concatenate=True,
+        new_axes={"c": nchan},
+        adjust_chunks={"c": nchan},
+    )
+
+    columns = {
+        output_column: (("row", "chan", "corr"), regridded.map_blocks(lambda block: block[0], dtype=line_data.dtype)),
+        "FLAG": (("row", "chan", "corr"), regridded.map_blocks(lambda block: block[1], dtype=bool)),
+        "WEIGHT_SPECTRUM": (("row", "chan", "corr"), regridded.map_blocks(lambda block: block[2], dtype=msds.WEIGHT_SPECTRUM.dtype)),
+    }
+
+    return output_ms_dataset(msds, columns, spw_id, field_id), freqs_out, chanwidth
+
+
+def finalise_regridded_ms(input_ms, output_ms, spw_id, freqs, chanwidth, frame):
+    """Attach subtables to a freshly written MS and rewrite its spectral window.
+
+    The main table is written by ``xds_to_table``, which produces the columns but
+    none of the subtables an MS needs. This copies those across from the input
+    and then overwrites the processed spectral window so it describes the
+    regridded channel grid in the new reference frame.
+
+    Args:
+        input_ms (str|File): MS the subtables are copied from.
+        output_ms (str|File): MS to finalise, already carrying its main table.
+        spw_id (int): Row of ``SPECTRAL_WINDOW`` that was regridded.
+        freqs (np.ndarray): Output channel frequencies in Hz.
+        chanwidth (float): Output channel width in Hz; negative if descending.
+        frame (str): Target spectral frame, used to set ``MEAS_FREQ_REF``.
+    """
+    output_ms = str(output_ms)
+    freqs = np.asarray(freqs, dtype=float)
+
+    copy_ms_subtables(input_ms, output_ms)
+
+    nchan = freqs.size
+    widths = np.full(nchan, chanwidth, dtype=float)
+
+    # Address the subtable by path, not as "<ms>::SPECTRAL_WINDOW": the latter
+    # reaches it through the parent table and inherits the parent's access mode,
+    # which leaves the columns read-only here.
+    with table(f"{output_ms}/SPECTRAL_WINDOW", readonly=False, ack=False, lockoptions="auto") as spw:
+        spw.putcell("NUM_CHAN", spw_id, nchan)
+        spw.putcell("CHAN_FREQ", spw_id, freqs)
+        spw.putcell("CHAN_WIDTH", spw_id, widths)
+        spw.putcell("RESOLUTION", spw_id, np.abs(widths))
+        spw.putcell("EFFECTIVE_BW", spw_id, np.abs(widths))
+        spw.putcell("REF_FREQUENCY", spw_id, float(freqs[0]))
+        spw.putcell("TOTAL_BANDWIDTH", spw_id, float(abs(chanwidth) * nchan))
+        spw.putcell("MEAS_FREQ_REF", spw_id, FRAME_CODES[frame])
+
+    log.info(f"Wrote {nchan} channels to {output_ms} on a {frame.upper()} grid, from {freqs[0] / 1e6:.4f} MHz in steps of {chanwidth / 1e3:.4f} kHz")
 
 
 def ms_to_xarray_dataset(

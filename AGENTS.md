@@ -43,7 +43,27 @@ Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort ena
 
 **Image plane** (`im-mowjsub`): Operates on FITS spectral cubes. Loads the cube via `xarray-fits` into an `xr.Dataset` with dims `[ra, dec, spectral]`, chunks along RA using Dask, fits a continuum baseline per-pixel per-spectrum, and writes two FITS outputs: `*-cont.fits` (continuum model) and `*-line.fits` (residual). Entry point: `mowjsub/parser/im_mowjsub.py:runit`.
 
-**Visibility plane** (`vis-mowjsub`): Operates on CASA Measurement Sets. Reads via `dask-ms`, reshapes row-based data to `[time, baseline, freq, corr]`, fits per-baseline-per-correlation, and writes the result back to an MS column. Entry point: `mowjsub/parser/vis_mowjsub.py:runit`.
+**Visibility plane** (`vis-mowjsub`): Operates on CASA Measurement Sets. Reads via `dask-ms`, reshapes row-based data to `[time, baseline, freq, corr]`, fits per-baseline-per-correlation, and writes the result back to an MS column. Optionally applies a Doppler correction on the way out (see below). Entry point: `mowjsub/parser/vis_mowjsub.py:runit`.
+
+### Doppler correction (`mowjsub/doppler.py`)
+
+`--doppler-frame` resamples the continuum-subtracted visibilities onto a channel grid fixed in a chosen spectral frame, replacing the `regridms=True` half of a CASA `mstransform` pass. `doppler.py` is pure NumPy/astropy: frame apex velocities, per-timestamp conversion factors, common-grid derivation, and channel resampling. The dask orchestration and MS I/O live in `utils.py` (`doppler_regrid_dataset`, `finalise_regridded_ms`, `observatory_location`).
+
+Constants and the composition of conversion steps are taken from casacore's `MeasTable`/`MCFrequency`, so grids agree with CASA. Two details are load-bearing:
+
+- The topocentric-to-barycentric step is a **plain Newtonian projection** of the observer's velocity, *not* astropy's `radial_velocity_correction`. The latter carries relativistic terms casacore omits and would offset results from CASA by ~4.7 m/s. `tests/test_doppler.py::TestCasacoreAgreement` pins this against casacore's own measures engine (it skips unless casacore measures data is installed).
+- The fit happens on the native topocentric grid and only the residual is regridded — the opposite order to `mstransform`. The continuum structure being modelled is stationary in topocentric frequency.
+
+Since the channel count changes, this path requires `--output-ms`.
+
+### Writing a new MS
+
+`xds_to_table` writes only the columns it is handed and creates no subtables, so any `--output-ms` path (Doppler or not) goes through two shared helpers in `utils.py`:
+
+- `output_ms_dataset` — carries every row-shaped column of the input across and restores `FIELD_ID`/`DATA_DESC_ID`, which dask-ms groups on and therefore exposes as attrs rather than columns. The caller supplies only the per-channel columns.
+- `copy_ms_subtables` — copies the subtables over with `casacore.tables`. `finalise_regridded_ms` calls it and then rewrites `SPECTRAL_WINDOW` for the new grid.
+
+Three casacore quirks are worked around there and are easy to reintroduce: open tables with `lockoptions="auto"` (the default user locking leaves dask-ms-cached tables unlocked), address subtables as `path/SUBTABLE` rather than `ms::SUBTABLE` (the latter inherits the parent's read-only access), and close the handle `copy()` returns.
 
 ### Fitting functions (`mowjsub/fitfuncs.py`)
 

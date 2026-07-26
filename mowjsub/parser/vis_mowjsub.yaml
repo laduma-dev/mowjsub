@@ -78,6 +78,33 @@ inputs:
         info: Load the MS from a cache (give Zarr file name) if available, otherwise create it.
         dtype: File
         required: False
+  doppler-frame:
+        info: "Spectral reference frame to Doppler-correct the output to. When set, the continuum-subtracted visibilities are resampled onto a channel grid fixed in this frame, as CASA mstransform does with regridms=True. The continuum is always fitted on the native topocentric grid first, so the fit sees the bandpass structure where it is stationary. Requires --output-ms, since the output channel grid differs from the input. Leave unset to skip Doppler correction."
+        dtype: str
+        choices:
+            - topo
+            - geo
+            - bary
+            - lsrk
+            - lsrd
+            - galacto
+            - lgroup
+            - cmb
+            - source
+  doppler-chan-grid:
+        info: "Output channel grid for the Doppler correction. 'auto' derives the grid that every timestamp of this observation covers. Otherwise give 'nchan,chan0,chanwidth' with frequency units, e.g. '1000,1419.5MHz,26.1kHz'; use this to place several MSs on one common grid, since 'auto' only ever sees a single MS."
+        dtype: str
+        default: auto
+  doppler-interpolation:
+        info: "Interpolation used when resampling onto the Doppler-corrected grid. 'nearest' is what caracal asks of CASA mstransform and leaves channel noise uncorrelated; 'linear' is smoother but correlates adjacent channels."
+        dtype: str
+        choices:
+            - nearest
+            - linear
+        default: nearest
+  doppler-source-vel:
+        info: "Systemic radial velocity of the source in km/s, positive for recession. Only used with --doppler-frame=source; when unset it is read from the MS SOURCE::SYSVEL column."
+        dtype: float
 
 
 outputs:

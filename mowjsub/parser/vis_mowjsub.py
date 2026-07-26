@@ -23,7 +23,14 @@ from mowjsub.fitfuncs import (
     FitMedFilterFast,
     FitPolynomial,
 )
-from mowjsub.utils import get_ds_from_msdsl, ms_to_xarray_dataset
+from mowjsub.utils import (
+    copy_ms_subtables,
+    doppler_regrid_dataset,
+    finalise_regridded_ms,
+    get_ds_from_msdsl,
+    ms_to_xarray_dataset,
+    output_ms_dataset,
+)
 from mowjsub.visibility_plane import VisContSub
 
 log = init_logger(BIN.vis_plane)
@@ -57,6 +64,12 @@ def runit(**kwargs):
 
     if method in ("spline", "b-spline", "median-filter", "scipy-median-filter") and velwidth is None:
         raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={method}.")
+
+    doppler_frame = opts.doppler_frame
+    # Fail before the fit rather than after it: regridding changes the channel
+    # count, so the result cannot go back into a column of the input MS.
+    if doppler_frame and not opts.output_ms:
+        raise RuntimeError(f"--doppler-frame={doppler_frame} changes the channel grid, so it needs a separate output MS. Pass --output-ms.")
     outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
     input_column = opts.input_column
     output_column = opts.output_column
@@ -132,27 +145,69 @@ def runit(**kwargs):
 
     msds = get_ds_from_msdsl(ms_dsl, field_id=fieldid, data_desc_id=spwid)
 
-    ms_ds = msds.assign(
-        **{
-            output_column: (
-                ("row", "chan", "corr"),
-                getattr(msds, input_column).data - continuum.data,
-            ),
-        }
-    )
+    line_data = getattr(msds, input_column).data - continuum.data
 
-    if opts.output_ms:
-        ms_name = opts.output_ms
-        writes = [xds_to_table(ms_ds, ms_name, columns=["FLAG", "WEIGHT", output_column])]
-        print(f"Writing new MS with FLAG, WEIGHT, and {output_column}")
+    if doppler_frame:
+        # The continuum was fitted on the native topocentric grid, where the
+        # bandpass structure it models is stationary; only the residual is moved
+        # onto the Doppler-corrected grid.
+        source_vel = opts.doppler_source_vel
+        regrid_ds, freqs_out, chanwidth = doppler_regrid_dataset(
+            msds,
+            ms,
+            line_data,
+            output_column,
+            spwid,
+            fieldid,
+            frame=doppler_frame,
+            chan_grid=opts.doppler_chan_grid,
+            interpolation=opts.doppler_interpolation,
+            source_vel=None if source_vel is None else source_vel * 1e3,
+        )
 
+        ms_name = str(opts.output_ms)
+        writes = [xds_to_table([regrid_ds], ms_name, columns="ALL")]
+        with TqdmCallback(desc="Writing Doppler-corrected line data"):
+            da.compute(writes)
+
+        finalise_regridded_ms(ms, ms_name, spwid, freqs_out, chanwidth, doppler_frame)
+        log.info(f"UV plane continuum subtraction completed. Doppler-corrected line data written to column '{output_column}' in {ms_name}.")
+    elif opts.output_ms:
+        # A new MS needs every row column plus the subtables, not just the line
+        # data: anything left out here is simply absent from the result.
+        ms_name = str(opts.output_ms)
+        dims = ("row", "chan", "corr")
+        out_ds = output_ms_dataset(
+            msds,
+            {
+                output_column: (dims, line_data),
+                "FLAG": (dims, msds.FLAG.data),
+                "WEIGHT_SPECTRUM": (dims, msds.WEIGHT_SPECTRUM.data),
+            },
+            spwid,
+            fieldid,
+        )
+
+        writes = [xds_to_table([out_ds], ms_name, columns="ALL")]
+        with TqdmCallback(desc="Writing line data to new MS"):
+            da.compute(writes)
+
+        copy_ms_subtables(ms, ms_name)
+        log.info(f"UV plane continuum subtraction completed. Line data written to column '{output_column}' in {ms_name}.")
     else:
-        writes = [xds_to_table(ms_ds, ms, [output_column])]
-        print(f"Writing line data to column '{output_column}' in {ms}...")
+        ms_ds = msds.assign(
+            **{
+                output_column: (
+                    ("row", "chan", "corr"),
+                    line_data,
+                ),
+            }
+        )
 
-    with TqdmCallback(desc="Writing line data to MS"):
-        da.compute(writes)
-    print(f"UV plane continuum subtraction completed. Data written to column '{output_column}' in {ms}.")
+        writes = [xds_to_table(ms_ds, ms, [output_column])]
+        with TqdmCallback(desc="Writing line data to MS"):
+            da.compute(writes)
+        log.info(f"UV plane continuum subtraction completed. Line data written to column '{output_column}' in {ms}.")
 
     # DONE
     dtime = time.time() - start_time
