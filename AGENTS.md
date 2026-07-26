@@ -26,6 +26,9 @@ uv run ruff check src/mowjsub/
 # Format
 uv run ruff format src/mowjsub/
 
+# Audit dependencies for known vulnerabilities
+uv run --with pip-audit python -m pip_audit --skip-editable
+
 # Run the image-plane CLI
 uv run im-mowjsub <input.fits> [options]
 
@@ -35,7 +38,11 @@ uv run vis-mowjsub [options]
 
 The repo ships a tracked pre-commit hook at `.githooks/pre-commit`, enabled per clone with `git config core.hooksPath .githooks`. It runs `ruff check` and `ruff format --check` over the staged Python files, check-only — it never rewrites a file mid-commit. It uses whatever ruff `uv run` resolves, so it agrees with `uv run ruff check src/mowjsub/` by construction. Bypass with `git commit --no-verify`. There is no `pre-commit` framework dependency; don't reintroduce one.
 
-Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort enabled.
+When the commit includes `pyproject.toml`, the hook also runs `pip-audit` over the dependency tree — the audit is skipped otherwise, so ordinary commits don't pay a network round-trip. It distinguishes a real finding from pip-audit failing to run (no network, PyPI down) and only blocks on the former. CI runs the same audit unconditionally on every matrix entry.
+
+Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort enabled. The rule set is pinned with `select` rather than `extend-select`, deliberately — see the comment in that file before widening it.
+
+`uv.lock` is intentionally untracked, which is why `pip-audit` exists here: Dependabot can only see `pyproject.toml`'s loose constraints and cannot alert on the resolved transitive tree.
 
 ## Architecture
 

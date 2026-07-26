@@ -76,6 +76,11 @@ it prints the command to fix things:
 uv run ruff check --fix src/mowjsub/ tests/ && uv run ruff format src/mowjsub/ tests/
 ```
 
+When your commit includes `pyproject.toml`, the hook additionally runs
+`pip-audit` over the dependency tree (see [Dependencies](#dependencies) below).
+It skips the audit on commits that cannot have changed dependencies, so most
+commits pay nothing for it.
+
 `git commit --no-verify` bypasses it when you genuinely need to.
 
 Note `uv.lock` is **not** committed (see `.gitignore`), so a fresh clone
@@ -117,6 +122,26 @@ you changed `doppler.py`.
 - `ruff format src/mowjsub/ tests/` for autoformatting; the hook checks both.
 - Match the surrounding code's naming, idiom, and comment density.
 
+## Dependencies
+
+```bash
+uv run --with pip-audit python -m pip_audit --skip-editable
+```
+
+This is the project's real check on transitive dependencies, and CI runs it on
+every push across the whole matrix. The reason it matters: `uv.lock` is
+untracked, so GitHub's Dependabot only ever sees the loose constraints in
+`pyproject.toml` and cannot alert on the resolved tree at all. Nothing else
+covers it.
+
+`--skip-editable` skips mowjsub itself, which is not on PyPI and has no
+advisories to look up. Don't add `--strict` — it would turn that skip into an
+error.
+
+When an advisory lands, the fix is normally to raise the floor on the affected
+package in `pyproject.toml` (not to pin an exact version, which is what made the
+pytest advisory linger), then `uv lock && uv sync`.
+
 ## Documentation
 
 Docs are built with Sphinx (Furo theme) and hosted on Read the Docs:
@@ -134,8 +159,8 @@ that group is the single source of truth.
 
 1. Branch off `main` and keep PRs **small and focused**.
 2. Make sure `uv run pytest` and `uv run ruff check src/mowjsub/` pass locally
-   before opening a PR. CI (`.github/workflows/tests-builds.yaml`) runs both
-   across Python 3.11, 3.12 and 3.13.
+   before opening a PR. CI (`.github/workflows/tests-builds.yaml`) runs those
+   plus `pip-audit` across Python 3.11, 3.12 and 3.13.
 3. Push and open a PR against `main`. Reference any related issue.
 
 ### Commit messages

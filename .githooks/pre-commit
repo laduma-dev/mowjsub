@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # mowjsub pre-commit hook: lint and format-check the Python files being
-# committed. Tracked in the repo and enabled per clone with
+# committed, and audit the dependency tree when pyproject.toml is part of the
+# commit. Tracked in the repo and enabled per clone with
 #
 #     git config core.hooksPath .githooks
 #
@@ -25,38 +26,39 @@
 
 set -uo pipefail
 
+status=0
+
 # Only what is actually being committed: a dirty file elsewhere in the tree
 # is not this commit's problem, and blocking on it trains people to --no-verify.
-mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM -z |
-    tr '\0' '\n' | grep -E '\.py$' || true)
-
-if [ ${#staged[@]} -eq 0 ]; then
-    exit 0
-fi
+mapfile -t staged_all < <(git diff --cached --name-only --diff-filter=ACM -z | tr '\0' '\n')
+mapfile -t staged_py < <(printf '%s\n' "${staged_all[@]}" | grep -E '\.py$' || true)
 
 # Files can be staged for deletion between the diff above and the check below,
 # and ruff errors on a path that is not there.
 existing=()
-for f in "${staged[@]}"; do
+for f in "${staged_py[@]}"; do
     [ -f "$f" ] && existing+=("$f")
 done
-[ ${#existing[@]} -eq 0 ] && exit 0
 
-if command -v uv >/dev/null 2>&1; then
-    ruff=(uv run --quiet ruff)
-elif command -v ruff >/dev/null 2>&1; then
-    ruff=(ruff)
-else
-    echo "pre-commit: neither 'uv' nor 'ruff' on PATH -- skipping lint." >&2
-    exit 0
-fi
+# --- lint -------------------------------------------------------------------
 
-status=0
-"${ruff[@]}" check "${existing[@]}" || status=1
-"${ruff[@]}" format --check "${existing[@]}" || status=1
+if [ ${#existing[@]} -gt 0 ]; then
+    if command -v uv >/dev/null 2>&1; then
+        ruff=(uv run --quiet ruff)
+    elif command -v ruff >/dev/null 2>&1; then
+        ruff=(ruff)
+    else
+        ruff=()
+        echo "pre-commit: neither 'uv' nor 'ruff' on PATH -- skipping lint." >&2
+    fi
 
-if [ $status -ne 0 ]; then
-    cat >&2 <<'MSG'
+    if [ ${#ruff[@]} -gt 0 ]; then
+        lint=0
+        "${ruff[@]}" check "${existing[@]}" || lint=1
+        "${ruff[@]}" format --check "${existing[@]}" || lint=1
+        if [ $lint -ne 0 ]; then
+            status=1
+            cat >&2 <<'MSG'
 
 pre-commit: ruff rejected the staged files.
 
@@ -64,6 +66,51 @@ pre-commit: ruff rejected the staged files.
   bypass: git commit --no-verify
 
 MSG
+        fi
+    fi
+fi
+
+# --- dependency audit -------------------------------------------------------
+#
+# Only when pyproject.toml is part of the commit. Auditing every commit would
+# add a network round-trip to commits that cannot have changed the dependency
+# tree, and a hook that is slow for no reason is a hook people bypass. Note
+# uv.lock is untracked, so a dependency change always shows up as pyproject.toml.
+#
+# `--skip-editable` skips mowjsub itself, which is not on PyPI and has no
+# advisories to look up. No `--strict`: it would turn that skip into an error.
+
+if printf '%s\n' "${staged_all[@]}" | grep -qx 'pyproject.toml'; then
+    if command -v uv >/dev/null 2>&1; then
+        audit_out=$(uv run --with pip-audit --quiet python -m pip_audit \
+            --progress-spinner off --skip-editable 2>&1)
+        audit_rc=$?
+
+        if [ $audit_rc -ne 0 ]; then
+            # Distinguish a real finding from pip-audit failing to run at all
+            # (no network, PyPI down, resolution error). Only the former is this
+            # commit's problem; blocking on the latter would be a hook that
+            # fails when the wifi does.
+            if printf '%s' "$audit_out" | grep -q 'known vulnerabilit'; then
+                status=1
+                printf '%s\n' "$audit_out" >&2
+                cat >&2 <<'MSG'
+
+pre-commit: pip-audit found known vulnerabilities in the dependency tree.
+
+  inspect: uv run --with pip-audit python -m pip_audit --skip-editable
+  fix:     raise the floor in pyproject.toml, then `uv lock && uv sync`
+  bypass:  git commit --no-verify
+
+MSG
+            else
+                echo "pre-commit: pip-audit could not run -- skipping audit." >&2
+                printf '%s\n' "$audit_out" | tail -3 >&2
+            fi
+        fi
+    else
+        echo "pre-commit: 'uv' not on PATH -- skipping dependency audit." >&2
+    fi
 fi
 
 exit $status

@@ -25,3 +25,9 @@ jobs:
       run: uv run ruff check src/mowjsub/
     - name: CI tests
       run: uv run pytest
+    # uv.lock is untracked, so Dependabot only ever sees pyproject.toml's loose
+    # constraints and cannot alert on the transitive tree. This is the check that
+    # actually covers it. Runs per matrix entry because resolution differs by
+    # Python version.
+    - name: Audit dependencies
+      run: uv run --with pip-audit python -m pip_audit --progress-spinner off --skip-editable

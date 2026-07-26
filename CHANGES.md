@@ -62,6 +62,15 @@ project's former name, **contsub**.
   `extend-select`). Inheriting ruff's defaults meant a ruff release could
   redefine the config's intent, and under 0.16 it did — 24 new violations in
   files nobody had touched.
+- **`pytest` raised to `>=9.0.3,<10`** for GHSA-6w46-j5rx-g56g (tmpdir
+  handling) — a floor rather than the previous exact `==8.4.1` pin, so the next
+  advisory fix does not need a pyproject edit.
+- **`pip-audit` added to CI and to the pre-commit hook.** Since `uv.lock` is
+  untracked, Dependabot only ever sees `pyproject.toml`'s loose constraints and
+  cannot alert on the resolved transitive tree; this is the check that covers
+  it. CI runs it on every matrix entry; the hook runs it only when the commit
+  includes `pyproject.toml`, and does not block when pip-audit itself fails to
+  run.
 - Added `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CITATION.cff`
   and this changelog.
 
