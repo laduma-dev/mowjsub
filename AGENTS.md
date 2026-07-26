@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This project uses `uv` for dependency management (a `uv.lock` is present). A `.venv` is already set up at `.venv/`.
 
 ```bash
-# Install with dev/test extras
-uv sync --group tests
+# Install with dev/test dependencies (`dev` is uv's default group)
+uv sync
 
 # Run all tests
 uv run pytest
@@ -21,10 +21,10 @@ uv run pytest
 uv run pytest tests/test_main.py::TestFitsFunc::test_b_spline
 
 # Lint
-uv run ruff check mowjsub/
+uv run ruff check src/mowjsub/
 
 # Format
-uv run ruff format mowjsub/
+uv run ruff format src/mowjsub/
 
 # Run the image-plane CLI
 uv run im-mowjsub <input.fits> [options]
@@ -33,7 +33,7 @@ uv run im-mowjsub <input.fits> [options]
 uv run vis-mowjsub [options]
 ```
 
-Pre-commit hooks run ruff check + ruff format automatically on commit (`pre-commit install` to activate).
+The repo ships a tracked pre-commit hook at `.githooks/pre-commit`, enabled per clone with `git config core.hooksPath .githooks`. It runs `ruff check` and `ruff format --check` over the staged Python files, check-only — it never rewrites a file mid-commit. It uses whatever ruff `uv run` resolves, so it agrees with `uv run ruff check src/mowjsub/` by construction. Bypass with `git commit --no-verify`. There is no `pre-commit` framework dependency; don't reintroduce one.
 
 Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort enabled.
 

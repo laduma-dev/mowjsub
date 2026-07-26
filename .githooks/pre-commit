@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# mowjsub pre-commit hook: lint and format-check the Python files being
+# committed. Tracked in the repo and enabled per clone with
+#
+#     git config core.hooksPath .githooks
+#
+# (see CONTRIBUTING.md). Git deliberately will not let a repository install
+# an executable hook by itself, so that one command is unavoidable -- but the
+# script is version-controlled, reviewable in diffs, and identical for
+# everyone, which is the part that actually matters.
+#
+# It installs nothing and pins nothing. It uses whatever ruff `uv run`
+# resolves for this project, so it agrees with `uv run ruff check src/mowjsub/`
+# by construction. That is the failure this replaced: the pre-commit framework
+# fetched its own ruff via `rev:` (pinned at v0.12.9), which drifted from the
+# venv's until the two disagreed about what "clean" means.
+#
+# Check-only, deliberately. A hook that rewrites files mid-commit leaves the
+# staged content different from what was just verified, so you either commit
+# unverified changes or have to re-stage and re-run. Failing with the command
+# to fix is less clever and more honest.
+#
+# Bypass with `git commit --no-verify` when you genuinely need to.
+
+set -uo pipefail
+
+# Only what is actually being committed: a dirty file elsewhere in the tree
+# is not this commit's problem, and blocking on it trains people to --no-verify.
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM -z |
+    tr '\0' '\n' | grep -E '\.py$' || true)
+
+if [ ${#staged[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Files can be staged for deletion between the diff above and the check below,
+# and ruff errors on a path that is not there.
+existing=()
+for f in "${staged[@]}"; do
+    [ -f "$f" ] && existing+=("$f")
+done
+[ ${#existing[@]} -eq 0 ] && exit 0
+
+if command -v uv >/dev/null 2>&1; then
+    ruff=(uv run --quiet ruff)
+elif command -v ruff >/dev/null 2>&1; then
+    ruff=(ruff)
+else
+    echo "pre-commit: neither 'uv' nor 'ruff' on PATH -- skipping lint." >&2
+    exit 0
+fi
+
+status=0
+"${ruff[@]}" check "${existing[@]}" || status=1
+"${ruff[@]}" format --check "${existing[@]}" || status=1
+
+if [ $status -ne 0 ]; then
+    cat >&2 <<'MSG'
+
+pre-commit: ruff rejected the staged files.
+
+  fix:    uv run ruff check --fix src/mowjsub/ tests/ && uv run ruff format src/mowjsub/ tests/
+  bypass: git commit --no-verify
+
+MSG
+fi
+
+exit $status

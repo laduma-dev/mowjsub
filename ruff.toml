@@ -3,7 +3,26 @@ line-length = 180
 target-version = "py311"
 
 [lint]
-extend-select = [
+# `select`, not `extend-select`. This list is the repo's *whole* ruleset, stated
+# outright rather than expressed as a delta from whatever ruff happens to enable
+# by default.
+#
+# It used to be `extend-select = ["E501", "I"]`, which meant "ruff's defaults
+# plus these two" -- E4/E7/E9/F when it was written. Ruff's defaults have since
+# grown, so the same three lines silently came to mean something else entirely:
+# under ruff 0.16, `ruff check src/mowjsub/` began reporting 24 violations
+# (DTZ005, BLE001, RUF013, C408, B006, UP035) across files nobody had touched.
+# Since uv.lock is not tracked, CI resolves whatever ruff is newest, so this
+# arrived on its own. Pinning the set explicitly is what stops a future ruff
+# release from redefining this config's intent again.
+#
+# Adopting a broader ruleset is a fine thing to decide -- but it should be
+# decided, not inherited from a dependency bump. Add rules here deliberately.
+select = [
+    "E4",    # pycodestyle: imports
+    "E7",    # pycodestyle: statements
+    "E9",    # pycodestyle: runtime/syntax errors
+    "F",     # pyflakes
     "E501",  # Line length
-    "I"      # isort - sort imports
+    "I",     # isort - sort imports
 ]

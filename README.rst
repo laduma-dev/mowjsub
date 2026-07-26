@@ -5,8 +5,8 @@ Mowjsub
     :target: https://pypi.org/project/mowjsub/
     :alt: PyPI version
 
-.. image:: https://readthedocs.org/projects/contsub/badge/?version=latest
-    :target: https://contsub.readthedocs.io/en/latest/?badge=latest
+.. image:: https://readthedocs.org/projects/mowjsub/badge/?version=latest
+    :target: https://mowjsub.readthedocs.io/en/latest/?badge=latest
     :alt: Documentation Status
 
 
@@ -54,6 +54,6 @@ environment, and sync dependencies:
 
     ``--active`` ensures the package is installed in your activated virtual environment.
 
-The full documentation is available on `readthedocs <https://contsub.readthedocs.io/>`_.
+The full documentation is available on `readthedocs <https://mowjsub.readthedocs.io/>`_.
 
 

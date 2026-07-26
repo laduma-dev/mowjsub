@@ -17,35 +17,51 @@ dependencies = [
 	"scipy",
 	"xarray-fits",
 	"xarray",
-	"stimela>=2.1.2,<3",
+	"scabha>=2.2.0rc2",
 	"zarr",
 	"tqdm",
 	"dask-ms",
 	"dask",
 ]
 
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/mowjsub",
+    "/README.rst",
+    "/LICENSE",
+    "/CHANGES.md",
+    "/AGENTS.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/SECURITY.md",
+    "/CITATION.cff",
+    "/pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mowjsub"]
+
 [project.scripts]
 im-mowjsub = "mowjsub.parser.im_mowjsub:runit"
 vis-mowjsub = "mowjsub.parser.vis_mowjsub:runit"
 
-
 [dependency-groups]
-ruff = [
-    "pre-commit>=4.3.0",
-    "ruff>=0.12.9",
-]
-
+# Everything needed to develop and test. `dev` is uv's default group, so a plain
+# `uv sync` gets it and `uv run pytest`/`uv run ruff` just work. There used to be
+# a separate `tests` group holding pytest+ruff; it only ever added a way to get a
+# venv where `uv run pytest` fell through to a system pytest that cannot import
+# scabha. No `pre-commit` here either -- the hook is `.githooks/pre-commit`,
+# enabled with `git config core.hooksPath .githooks`, and it uses this group's
+# ruff rather than fetching its own.
 dev = [
-	"jupyter",
-	"matplotlib",
-    {include-group = "ruff"},
+    "ruff>=0.12.9",
+    "pytest==8.4.1",
+#	"jupyter",
+#	"matplotlib",
 ]
 
-tests = [
-	"pytest==8.4.1",
-    {include-group = "ruff"},
-    ]
-
+# Documentation build (Sphinx + Furo). `uv sync --group docs`.
 docs = [
 	"Sphinx>=8.1,<9",
 	"sphinx-copybutton",
@@ -54,12 +70,11 @@ docs = [
 	"sphinx_click==6.0.0",
 ]
 
-[tool.hatch.build.targets.sdist]
-include = ["mowjsub"]
-
-[tool.hatch.build.targets.wheel]
-include = ["mowjsub"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+python_files = ["*_tests.py", "test_*.py"]
+testpaths = ["tests"]
+pythonpath = ["src"]

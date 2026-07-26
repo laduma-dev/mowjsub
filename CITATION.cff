@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "mowjsub"
+abstract: >-
+  Continuum subtraction tools for spectral-line radio astronomy data, operating
+  either in the image plane on FITS spectral cubes or in the visibility plane on
+  CASA Measurement Sets, with optional Doppler correction onto a chosen spectral
+  frame.
+type: software
+authors:
+  - given-names: "Sphesihle"
+    family-names: "Makhathini"
+    email: "a0069067@wits.ac.za"
+    orcid: "https://orcid.org/0000-0001-9565-9622"
+  - given-names: "Mika"
+    family-names: "Naidoo"
+  - given-names: "Amir"
+    family-names: "Kazemi-Moridani"
+version: "2.0rc2"
+license: MIT
+repository-code: "https://github.com/laduma-dev/mowjsub"
+url: "https://mowjsub.readthedocs.io"
+keywords:
+  - Astronomy
+  - Radio interferometry
+  - Spectral line
+  - Continuum subtraction
