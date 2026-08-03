@@ -1,10 +1,13 @@
+import os
 import shutil
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import astropy.io.fits as fitsio
 import dask
+import dask.array as da
 import numpy as np
 from scabha import init_logger
 
@@ -217,3 +220,72 @@ class TestZdsFromFits(unittest.TestCase):
         zds = utils.zds_from_fits(path, rest_freq=1420.40575)
 
         assert zds.attrs["header"]["RESTFREQ"] == 1420.40575 * 1e6
+
+
+class TestWriteCubes(unittest.TestCase):
+    """Writing several cubes in one pass over the graph."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.header = fitsio.Header()
+        for index, (ctype, crval, cdelt, cunit) in enumerate([("RA---SIN", 20.0, -1e-3, "deg"), ("DEC--SIN", -30.0, 1e-3, "deg"), ("FREQ", 1.4e9, 1e6, "Hz")], start=1):
+            self.header[f"CTYPE{index}"], self.header[f"CRVAL{index}"] = ctype, crval
+            self.header[f"CDELT{index}"], self.header[f"CUNIT{index}"], self.header[f"CRPIX{index}"] = cdelt, cunit, 1
+        self.header["BUNIT"], self.header["SPECSYS"] = "Jy/beam", "TOPOCENT"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_both_cubes_round_trip_with_their_headers(self):
+        one = da.arange(8 * 4 * 4, chunks=(32,), dtype="f4").reshape(8, 4, 4)
+        two = one * -1
+        paths = [self.tmpdir / "a.fits", self.tmpdir / "b.fits"]
+
+        utils.write_cubes([(str(paths[0]), one, self.header), (str(paths[1]), two, self.header)])
+
+        for path, expected in zip(paths, (one, two)):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")  # a short data unit reads back as truncated
+                np.testing.assert_allclose(fitsio.getdata(path), np.asarray(expected))
+            header = fitsio.getheader(path)
+            assert header["NAXIS3"], header["NAXIS1"] == (8, 4)
+            assert header["BUNIT"] == "Jy/beam"
+            assert header["SPECSYS"] == "TOPOCENT"
+
+    def test_shared_work_is_computed_once(self):
+        """Both outputs come off one fit; two writeto calls would refit."""
+        calls = []
+
+        def expensive(block):
+            if block.size:  # dask calls once with an empty block to infer meta
+                calls.append(block.shape)
+            return block * 2
+
+        source = da.ones((4, 4, 4), chunks=(2, 4, 4), dtype="f4")
+        shared = source.map_blocks(expensive, dtype="f4")
+        utils.write_cubes(
+            [
+                (str(self.tmpdir / "c.fits"), shared, self.header),
+                (str(self.tmpdir / "d.fits"), shared + 1, self.header),
+            ]
+        )
+
+        assert len(calls) == source.numblocks[0], f"expected one call per block, got {len(calls)}"
+
+    def test_an_existing_file_is_refused_unless_overwrite(self):
+        path = self.tmpdir / "e.fits"
+        array = da.zeros((2, 4, 4), chunks=-1, dtype="f4")
+        utils.write_cubes([(str(path), array, self.header)])
+
+        with self.assertRaises(OSError):
+            utils.write_cubes([(str(path), array, self.header)])
+
+        utils.write_cubes([(str(path), array + 5, self.header)], overwrite=True)
+        np.testing.assert_allclose(fitsio.getdata(path), 5.0)
+
+    def test_the_data_unit_is_block_aligned(self):
+        """A file that stops short of a 2880-byte block reads back as truncated."""
+        for shape in ((7, 13, 5), (1, 32, 4, 4)):
+            path = self.tmpdir / f"pad{len(shape)}{shape[0]}.fits"
+            utils.write_cubes([(str(path), da.zeros(shape, chunks=-1, dtype="f4"), self.header)], overwrite=True)
+            assert os.path.getsize(path) % utils.FITS_BLOCK == 0, shape

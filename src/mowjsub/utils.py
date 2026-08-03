@@ -1,4 +1,5 @@
 import datetime
+import os
 import warnings
 from collections import namedtuple
 from typing import Dict
@@ -15,9 +16,7 @@ from casacore.tables import table
 from daskms import Dataset, xds_from_ms, xds_from_table
 from fitstoolz.reader import FitsData
 from scabha import init_logger
-from scabha.basetypes import File
 from tqdm.dask import TqdmCallback
-from xarrayfits import xds_from_fits
 
 from mowjsub import BIN
 from mowjsub.doppler import (
@@ -174,34 +173,81 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False
         )
 
 
-def subtract_fits(data_file: File, model_file: File, hdu_idx: int, ra_chunks: int = None):
-    """Returns the residual of two FITS files as a FitsPrimaryHDU object
+#: FITS lays a file out in blocks of this many bytes, data unit included.
+FITS_BLOCK = 2880
+
+
+def allocate_fits(path, shape, dtype, header, overwrite=False):
+    """Create a FITS file of the right size, open for writing a chunk at a time.
+
+    The data unit is reserved on disk rather than built in memory, so a caller
+    holding a lazy cube can stream into ``hdulist[0].data`` without ever having
+    the whole thing.
 
     Args:
-        data_file (File): FITS file of the data
-        model_file (File): FITS file of model data
-        hdu_idx (int): FITS HDU index
-        ra_chunks (int): Chunk size along the RA axis. Zero or unset reads the cube as a single chunk.
+        path (str): File to create.
+        shape (tuple): Array shape, in numpy (C) order.
+        dtype: Element type.
+        header: Header to base the output on; ``NAXIS*`` are set from ``shape``.
+        overwrite (bool): Replace an existing file.
 
     Returns:
-        FitsPrimaryHDU
+        astropy.io.fits.HDUList: Open in update mode, memory-mapped.
+
+    Raises:
+        OSError: ``path`` exists and ``overwrite`` is False.
     """
+    if os.path.exists(path):
+        if not overwrite:
+            raise OSError(f"Output file '{path}' already exists.")
+        os.remove(path)
 
-    # xarrayfits chunk keys are C-order axis indices, and RA is NAXIS1, i.e. the
-    # fastest-varying FITS axis. In C order that is the last axis, whatever the
-    # cube's dimensionality. Unlisted axes are read as a single chunk.
-    ndim = fitsio.getheader(data_file, hdu_idx)["NAXIS"]
-    chunks = {ndim - 1: ra_chunks} if ra_chunks else {}
+    # A one-element stub only so astropy derives BITPIX from the dtype; the
+    # dimensions are then stated for the real array.
+    out = fitsio.PrimaryHDU(data=np.zeros((1,) * len(shape), dtype=dtype), header=header).header
+    out["NAXIS"] = len(shape)
+    for index, length in enumerate(reversed(shape), start=1):
+        out[f"NAXIS{index}"] = int(length)
+    out.tofile(path)
 
-    data_ds = xds_from_fits(data_file, hdus=hdu_idx, chunks=chunks)[0]
-    model_ds = xds_from_fits(model_file, hdus=hdu_idx, chunks=chunks)[0]
-    residual_ds = data_ds.hdu.data - model_ds.hdu.data
+    nbytes = int(np.prod(shape)) * np.dtype(dtype).itemsize
+    # Pad the data unit to a whole block: a file that stops short of one reads
+    # back as truncated.
+    reserved = -(-nbytes // FITS_BLOCK) * FITS_BLOCK
+    with open(path, "rb+") as handle:
+        handle.seek(len(out.tostring()) + reserved - 1)
+        handle.write(b"\0")
 
-    out_ds = data_ds.assign(
-        hdu=(data_ds.hdu.dims, residual_ds, data_ds.hdu.attrs),
-    )
-    header = fitsio.Header(data_ds.hdu.header)
-    return fitsio.PrimaryHDU(out_ds.hdu.data, header=header)
+    return fitsio.open(path, mode="update", memmap=True)
+
+
+def write_cubes(outputs, overwrite=False):
+    """Write several cubes to FITS in a single pass over the dask graph.
+
+    The continuum and the residual come from the same per-pixel fit, and that
+    fit is the expensive part of a run. Writing them with a ``writeto`` each
+    makes dask walk the graph once per file and refit every spectrum -- measured
+    at 2x on a 128x128x256 cube. One ``da.store`` shares the work, and streams
+    it, so neither cube is ever held whole.
+
+    This replaced a ``subtract_fits`` that took *paths*: the continuum was
+    written, then read straight back alongside the input to form the residual
+    from arrays the caller already had. The Doppler path had to stage a
+    topocentric continuum in a scratch file to satisfy it.
+
+    Args:
+        outputs (list): One ``(path, array, header)`` per cube.
+        overwrite (bool): Replace existing files.
+    """
+    handles = []
+    try:
+        for path, array, header in outputs:
+            handles.append(allocate_fits(path, array.shape, array.dtype, header, overwrite=overwrite))
+
+        da.store([array for _, array, _ in outputs], [handle[0].data for handle in handles])
+    finally:
+        for handle in handles:
+            handle.close()
 
 
 def spectral_frequencies(header):

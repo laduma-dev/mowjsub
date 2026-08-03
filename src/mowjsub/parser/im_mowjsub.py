@@ -2,7 +2,6 @@ import glob
 import os
 import time
 
-import astropy.io.fits as fitsio
 import click
 import dask
 import dask.array as da
@@ -27,7 +26,7 @@ from mowjsub.utils import (
     apply_cube_doppler,
     get_automask,
     plan_cube_doppler,
-    subtract_fits,
+    write_cubes,
     zds_from_fits,
 )
 
@@ -179,26 +178,16 @@ def runit(**kwargs):
 
     header = zds.attrs["header"]
 
+    # The residual is an array operation now, on the cube already in hand and in
+    # the file's own axis order. It used to be formed by writing the continuum
+    # out and reading it straight back alongside the input -- which is also why
+    # the Doppler path needed a `{prefix}-cont-topo.fits` scratch file, since the
+    # continuum had to exist on disk before the residual could be taken.
+    line = zds.DATA.transpose(*zds.attrs["fits_dims"]).data - continuum
+
     if not opts.doppler_frame:
-        out_ds_cont = fitsio.PrimaryHDU(continuum, header=header)
-
-        out_ds_cont.writeto(outcont.PATH, overwrite=opts.overwrite)
-        log.info(f"Continuum model cube written to: {outcont}")
-
-        out_ds_line = subtract_fits(
-            infits.PATH,
-            outcont.PATH,
-            hdu_idx=opts.hdu_index,
-            ra_chunks=ra_chunks,
-        )
-        log.info(f"Writing residual data (line cube) to: {outline}")
-        out_ds_line.writeto(outline.PATH, overwrite=opts.overwrite)
+        outputs = [(outcont.PATH, continuum, header), (outline.PATH, line, header)]
     else:
-        # subtract_fits reads its continuum back off disk, so the topocentric
-        # model has to exist as a file before the residual can be formed. Stage
-        # it beside the outputs rather than writing outcont twice: --overwrite
-        # is checked once, against files from previous runs, so a second write
-        # to outcont would either trip that check or have to bypass it.
         source_vel = opts.doppler_source_vel
         plan = plan_cube_doppler(
             header,
@@ -211,28 +200,18 @@ def runit(**kwargs):
             source_vel=None if source_vel is None else source_vel * 1e3,
         )
 
-        scratch = File(f"{prefix}-cont-topo.fits")
-        fitsio.PrimaryHDU(continuum, header=header).writeto(scratch.PATH, overwrite=True)
-        try:
-            line_hdu = subtract_fits(
-                infits.PATH,
-                scratch.PATH,
-                hdu_idx=opts.hdu_index,
-                ra_chunks=ra_chunks,
-            )
+        # One plan for both cubes, so the pair stays on a single grid and
+        # remains recombinable.
+        outputs = [
+            (outcont.PATH, *apply_cube_doppler(continuum, header, plan, opts.doppler_interpolation)),
+            (outline.PATH, *apply_cube_doppler(line, header, plan, opts.doppler_interpolation)),
+        ]
 
-            # One plan for both cubes, so the pair stays on a single grid and
-            # remains recombinable.
-            cont_data, cont_header = apply_cube_doppler(continuum, header, plan, opts.doppler_interpolation)
-            fitsio.PrimaryHDU(cont_data, header=cont_header).writeto(outcont.PATH, overwrite=opts.overwrite)
-            log.info(f"Continuum model cube written to: {outcont}")
-
-            line_data, line_header = apply_cube_doppler(line_hdu.data, line_hdu.header, plan, opts.doppler_interpolation)
-            log.info(f"Writing residual data (line cube) to: {outline}")
-            fitsio.PrimaryHDU(line_data, header=line_header).writeto(outline.PATH, overwrite=opts.overwrite)
-        finally:
-            if os.path.exists(scratch.PATH):
-                os.remove(scratch.PATH)
+    log.info(f"Writing continuum model cube to: {outcont}")
+    log.info(f"Writing residual data (line cube) to: {outline}")
+    # Both cubes in one pass: they share the per-pixel fit, and a writeto each
+    # would make dask walk that graph twice and refit every spectrum.
+    write_cubes(outputs, overwrite=opts.overwrite)
 
     # DONE
     dtime = time.time() - start_time

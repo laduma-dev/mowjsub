@@ -116,13 +116,18 @@ Available fitters:
 
 ```
 im_mowjsub.py:runit
-  └─ zds_from_fits()          # FITS → xr.Dataset with FREQS coord
+  └─ zds_from_fits()          # FITS → xr.Dataset, via fitstoolz.FitsData
   └─ [optional] get_automask() # sigma-clip automask using ContSub + PixSigmaClip
   └─ da.gufunc(ContSub.fitContinuum)  # Dask parallel over RA blocks
-  └─ subtract_fits()          # data − continuum → line cube
+  └─ line = data − continuum  # an array op, in the file's own axis order
+  └─ write_cubes()            # both cubes, one pass over the graph
 ```
 
 `ContSub.fitContinuum` iterates over all `(ra, dec)` pixels, calling `fitfunc.fit` on each 1D spectrum.
+
+**Both cubes are written in one `da.store`, and that is load-bearing.** They share the per-pixel fit, which is the expensive part of a run; a `writeto` each makes dask walk that graph twice and refit every spectrum — measured at 2x on a 128×128×256 cube. `utils.write_cubes` reserves each output on disk with `allocate_fits` and streams into the memory map, so neither cube is held whole either. If you add a third output derived from the same fit, add it to the same `write_cubes` call rather than writing it separately.
+
+This replaced a `subtract_fits` that took *paths*: it wrote the continuum, then read it straight back alongside the input to form the residual from arrays the caller already had. The Doppler path had to stage a topocentric continuum in `{prefix}-cont-topo.fits` and delete it in a `finally`, purely to satisfy that. Both are gone, and with them the last use of `xarray-fits`, which is no longer a dependency.
 
 ### CLI parameter schemas
 

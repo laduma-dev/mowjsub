@@ -393,12 +393,26 @@ class TestEndToEnd(unittest.TestCase):
         for key in ("NAXIS3", "CRVAL3", "CDELT3", "CRPIX3", "SPECSYS"):
             assert headers[0][key] == headers[1][key], key
 
-    def test_the_scratch_continuum_is_cleaned_up(self):
+    def test_no_scratch_continuum_is_written(self):
+        """The residual is taken from arrays, so nothing is staged on disk.
+
+        The Doppler path used to write a topocentric continuum to
+        ``{prefix}-cont-topo.fits`` and delete it in a ``finally``, because the
+        residual was formed by re-reading the continuum off disk.
+        """
         result, _, _ = self._run("--doppler-frame", "bary")
         assert result.exit_code == 0, result.output
 
         assert not (self.tmpdir / "out-cont-topo.fits").exists()
         assert sorted(p.name for p in self.tmpdir.glob("*.fits")) == ["cube.fits", "out-cont.fits", "out-line.fits"]
+
+    def test_the_continuum_and_line_add_back_up(self):
+        """Whatever else the pair go through, they have to sum to the input."""
+        result, cont, line = self._run()
+        assert result.exit_code == 0, result.output
+
+        source = fitsio.getdata(self.cube)
+        np.testing.assert_allclose(fitsio.getdata(cont) + fitsio.getdata(line), source, rtol=1e-5, atol=1e-5)
 
     def test_explicit_grid_is_honoured(self):
         result, _, line = self._run("--doppler-frame", "lsrk", "--doppler-chan-grid", "20,1405MHz,1MHz")
