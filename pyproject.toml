@@ -15,7 +15,6 @@ dependencies = [
 	"numpy",
 	"astropy",
 	"scipy",
-	"xarray-fits",
 	"xarray",
 	"scabha>=2.2.0rc2",
 	"zarr",

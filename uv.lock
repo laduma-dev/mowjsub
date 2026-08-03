@@ -506,7 +506,6 @@ dependencies = [
     { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tqdm" },
     { name = "xarray" },
-    { name = "xarray-fits" },
     { name = "zarr", version = "3.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "zarr", version = "3.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
@@ -535,7 +534,6 @@ requires-dist = [
     { name = "scipy" },
     { name = "tqdm" },
     { name = "xarray" },
-    { name = "xarray-fits" },
     { name = "zarr" },
 ]
 
@@ -1480,21 +1478,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ea/96/3f7bdd00e505ec3698903415b30135024703e017b28c6b61f98da3193b0d/xarray-2026.7.0.tar.gz", hash = "sha256:361b495928fdbf5b58d0969bb6775339019da5e93ca74d61ddf4eb5edd6ce604", size = 3145348, upload-time = "2026-07-09T17:38:26.515Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/57/5b/28365212062939d213802e5e5fe855cdb231e1c2a93254ba1690066504e3/xarray-2026.7.0-py3-none-any.whl", hash = "sha256:bf9dd130b93806dc78e90c1b7ac24851b31557b888674c53622235691cf21824", size = 1426778, upload-time = "2026-07-09T17:38:24.224Z" },
-]
-
-[[package]]
-name = "xarray-fits"
-version = "0.2.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "astropy" },
-    { name = "dask", extra = ["array"] },
-    { name = "fsspec" },
-    { name = "xarray" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/53/10/d51c64b219e034348d5d15dc0232179392c2501a181b5525a452487b9624/xarray_fits-0.2.6.tar.gz", hash = "sha256:f5291b0677c1aa831018ff3de78720197c69beeb8a43cf335fea43f4dbed9827", size = 16480, upload-time = "2026-02-26T13:40:11.605Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/83/0c/15b29823e23e96627023b191e24109668cd51ce9d3c95a891221a0d37ead/xarray_fits-0.2.6-py3-none-any.whl", hash = "sha256:964837d3a2f6ec98b008120b2ff9910871992a0e7d54f244e2d622a321e7216d", size = 8814, upload-time = "2026-02-26T13:40:10.598Z" },
 ]
 
 [[package]]
