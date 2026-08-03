@@ -8,5 +8,6 @@ BIN = OmegaConf.create(
     {
         "im_plane": "im-mowjsub",
         "vis_plane": "vis-mowjsub",
+        "doppler_plane": "doppler-mowjsub",
     }
 )

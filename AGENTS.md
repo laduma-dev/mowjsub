@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`mowjsub` is a Python library for radio astronomy continuum subtraction, supporting both image-plane (FITS cubes) and visibility-plane (Measurement Set) workflows. It exposes two CLI entry points: `im-mowjsub` and `vis-mowjsub`.
+`mowjsub` is a Python library for radio astronomy continuum subtraction, supporting both image-plane (FITS cubes) and visibility-plane (Measurement Set) workflows. It exposes three CLI entry points: `im-mowjsub`, `vis-mowjsub` and `doppler-mowjsub`.
 
 ## Commands
 
@@ -34,6 +34,9 @@ uv run im-mowjsub <input.fits> [options]
 
 # Run the visibility-plane CLI
 uv run vis-mowjsub [options]
+
+# Run the standalone Doppler-correction CLI
+uv run doppler-mowjsub <input.ms> [options]
 ```
 
 The repo ships a tracked pre-commit hook at `.githooks/pre-commit`, enabled per clone with `git config core.hooksPath .githooks`. It runs `ruff check` and `ruff format --check` over the staged Python files, check-only — it never rewrites a file mid-commit. It uses whatever ruff `uv run` resolves, so it agrees with `uv run ruff check src/mowjsub/` by construction. Bypass with `git commit --no-verify`. There is no `pre-commit` framework dependency; don't reintroduce one.
@@ -48,7 +51,7 @@ Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort ena
 
 ## Architecture
 
-### Two processing pipelines
+### Processing pipelines
 
 **Image plane** (`im-mowjsub`): Operates on FITS spectral cubes. Loads the cube via `xarray-fits` into an `xr.Dataset` with dims `[ra, dec, spectral]`, chunks along RA using Dask, fits a continuum baseline per-pixel per-spectrum, and writes two FITS outputs: `*-cont.fits` (continuum model) and `*-line.fits` (residual). Entry point: `mowjsub/parser/im_mowjsub.py:runit`.
 
@@ -58,12 +61,26 @@ Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort ena
 
 `--doppler-frame` resamples the continuum-subtracted visibilities onto a channel grid fixed in a chosen spectral frame, replacing the `regridms=True` half of a CASA `mstransform` pass. `doppler.py` is pure NumPy/astropy: frame apex velocities, per-timestamp conversion factors, common-grid derivation, and channel resampling. The dask orchestration and MS I/O live in `utils.py` (`doppler_regrid_dataset`, `finalise_regridded_ms`, `observatory_location`).
 
+The correction is reachable three ways, and the differences are physical, not cosmetic:
+
+- `vis-mowjsub --doppler-frame` — fused into a contsub run, one pass.
+- `doppler-mowjsub` — the same correction standalone, over an already-subtracted MS (`parser/doppler_mowjsub.py`). Reuses `doppler_regrid_dataset`/`finalise_regridded_ms` unchanged and does no fitting. Exists so a pipeline can separate the two stages without the regrid landing first.
+- `im-mowjsub --doppler-frame` — image plane, via `plan_cube_doppler`/`apply_cube_doppler` in `utils.py` and `resample_cube` in `doppler.py`.
+
+The first two apply **one factor per timestamp**. The image-plane path cannot: a cube has already been integrated over time, so it gets a single factor and the intra-track smearing is unrecoverable. It is safe only when the drift over the observation is much smaller than a channel — `--doppler-obs-duration` makes that check explicit and warns past a tenth of a channel. Do not present the three as interchangeable.
+
+`doppler_regrid_dataset` requires a topocentric input grid (`require_topocentric`, checked against `SPECTRAL_WINDOW::MEAS_FREQ_REF`), so an MS that `mstransform` already regridded is refused rather than corrected twice.
+
+Two traps in the image-plane path: `FitsHeader.retFreq()` returns **MHz** while `parse_channel_grid` returns **Hz**, so cube frequencies are converted before touching `doppler.py`; and `retFreq` goes through astropy's high-level WCS, which needs a usable obstime even to convert pixels to frequencies, so `plan_cube_doppler` resolves the epoch first and stamps it into the header copy it passes on. `FITS_SPECSYS` (FITS keyword names) and `FRAME_CODES` (MS integer codes) describe the same frames for different formats and must not be substituted for one another.
+
 Constants and the composition of conversion steps are taken from casacore's `MeasTable`/`MCFrequency`, so grids agree with CASA. Two details are load-bearing:
 
 - The topocentric-to-barycentric step is a **plain Newtonian projection** of the observer's velocity, *not* astropy's `radial_velocity_correction`. The latter carries relativistic terms casacore omits and would offset results from CASA by ~4.7 m/s. `tests/test_doppler.py::TestCasacoreAgreement` pins this against casacore's own measures engine (it skips unless casacore measures data is installed).
 - The fit happens on the native topocentric grid and only the residual is regridded — the opposite order to `mstransform`. The continuum structure being modelled is stationary in topocentric frequency.
 
 Since the channel count changes, this path requires `--output-ms`.
+
+`vis-mowjsub --output-column` is deliberately **required with no default**. It used to default to `LINE_DATA`, which is not an MS-standard column name; don't reintroduce a default. The same reasoning makes both `--input-column` and `--output-column` required on `doppler-mowjsub` — an MS written by `vis-mowjsub --output-ms` contains no `DATA` column at all (`output_ms_dataset` drops `CHANNEL_COLUMNS` and re-adds only what the caller passes), while an in-place run leaves `DATA` holding the raw visibilities, so any default is wrong in one of the two cases. Writing the input column back in place is refused.
 
 ### Writing a new MS
 

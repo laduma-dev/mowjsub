@@ -66,12 +66,15 @@ Setting ``--doppler-frame`` makes :command:`vis-mowjsub` do that resampling itse
                 --fit-model b-spline \
                 --order 3 \
                 --vel-width 250 \
+                --output-column DATA \
                 --doppler-frame bary \
                 --output-ms line.ms
 
 The continuum is always fitted **before** the regrid, on the native topocentric grid. This is deliberate: the bandpass and standing-wave structure the fit is modelling is stationary in topocentric frequency, and fitting first also means the fit sees channels whose noise is still uncorrelated. Only the residual is moved onto the Doppler-corrected grid. Note that this ordering differs from CASA ``mstransform``, which regrids before it subtracts.
 
-Because the output channel grid differs from the input one, ``--doppler-frame`` requires ``--output-ms``; the result cannot be written back into a column of the input MS. The new MS carries the regridded line data in ``--output-column``, together with a ``SPECTRAL_WINDOW`` describing the new grid and its reference frame. Pass ``--output-column DATA`` if the imager you feed it to expects that column.
+Because the output channel grid differs from the input one, ``--doppler-frame`` requires ``--output-ms``; the result cannot be written back into a column of the input MS. The new MS carries the regridded line data in ``--output-column``, together with a ``SPECTRAL_WINDOW`` describing the new grid and its reference frame.
+
+``--output-column`` is required and has no default: there is no standard MS column name for continuum-subtracted visibilities, so mowjsub does not invent one. ``DATA`` is usually the right answer when the result goes straight to an imager. Note that without ``--output-ms`` the column is written back into the input MS, so naming the column you are reading is refused rather than allowed to destroy it.
 
 Available frames are ``topo``, ``geo``, ``bary``, ``lsrk``, ``lsrd``, ``galacto``, ``lgroup``, ``cmb`` and ``source``, matching the options CASA accepts. ``bary`` and ``lsrk`` are the usual choices for extragalactic and Galactic HI respectively. The frame velocities and the way conversion steps are composed follow casacore, so the grids agree with CASA's to well under 0.1 m/s. ``source`` additionally needs a systemic velocity, taken from the MS ``SOURCE::SYSVEL`` column or from ``--doppler-source-vel`` in km/s.
 
@@ -80,6 +83,7 @@ By default (``--doppler-chan-grid auto``) the output grid is derived from the ob
 .. code-block:: bash
 
     vis-mowjsub input.ms \
+                --output-column DATA \
                 --doppler-frame bary \
                 --doppler-chan-grid '1000,1419.5MHz,26.1kHz' \
                 --output-ms line.ms
@@ -89,3 +93,68 @@ The grid is given as ``nchan,chan0,chanwidth``; both frequencies need a unit (``
 Resampling uses nearest-neighbour by default, which is what caracal asks of ``mstransform`` and which leaves the noise in neighbouring channels uncorrelated. ``--doppler-interpolation linear`` is smoother but correlates adjacent channels. In either case an output channel is flagged if it falls outside the observed band at that timestamp or if any input channel feeding it is flagged, and the output weights follow from propagating the input variances through the interpolation.
 
 
+
+Doppler correction as a separate step
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+:command:`vis-mowjsub --doppler-frame` fuses the two operations into one pass, which is convenient but forces a pipeline to reach the correction *through* a continuum subtraction. :command:`doppler-mowjsub` exposes the same correction on its own, over an MS whose continuum has already gone:
+
+.. code-block:: bash
+
+    doppler-mowjsub line.ms \
+                --input-column LINE_DATA \
+                --output-column DATA \
+                --doppler-frame bary \
+                --output-ms out.ms
+
+It takes the same ``--doppler-*`` parameters, does no fitting, and produces exactly what the fused path produces — the two are pinned against each other in the test suite. Use it when continuum subtraction and the frame transformation need to be separate pipeline stages, for instance where a workflow would otherwise run CASA ``mstransform`` after the subtraction and get the order the wrong way round.
+
+``--input-column`` and ``--output-column`` are both required. There is no standard MS column for continuum-subtracted visibilities, so the input column is whatever the subtraction stage was told to write, and guessing it is how you Doppler-correct the wrong data in silence.
+
+The input must still be on its native topocentric channel grid; an MS that has already been regridded, by ``mstransform`` or by an earlier mowjsub run, is refused rather than corrected twice. mowjsub reads ``SPECTRAL_WINDOW::MEAS_FREQ_REF`` to decide.
+
+Doppler correction in the image plane
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+:command:`im-mowjsub` also accepts ``--doppler-frame``, applied to both output cubes after the continuum fit:
+
+.. code-block:: bash
+
+    im-mowjsub cube.fits \
+               --output-prefix out \
+               --fit-model b-spline --order 3 --vel-width 250 \
+               --doppler-frame bary \
+               --doppler-obs-duration 2.5
+
+**Read this before using it.** The Doppler factor changes as the Earth turns, so the visibility-plane commands apply one factor per timestamp. A cube has already been integrated over time, so only a single factor can be applied to it. Shifting the spectral axis re-centres the line but cannot undo the smearing the drift caused while the data were being imaged — that information was destroyed by the integration.
+
+The test is a ratio:
+
+    the image-plane correction is safe when the line-of-sight velocity drifts by much less than one channel over the observation.
+
+Both quantities scale with frequency, so the ratio is the same whether you state it in km/s or kHz. Pass ``--doppler-obs-duration`` (in hours) and mowjsub computes the drift, logs it against the channel width, and warns when it exceeds a tenth of a channel. Without that option the correction is still applied, at the epoch in the header, but the check cannot be made and mowjsub says so. For a long track or a narrow channelisation, correct in the visibility plane instead.
+
+Where the image-plane path is unambiguously right is putting several observations onto one grid for stacking. That is a pure shift per cube, with no smearing penalty at all — give each run the same ``--doppler-chan-grid``.
+
+A cube carries far less metadata than an MS, so the correction is resolved from the header with explicit overrides for what it cannot supply:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Quantity
+     - Taken from
+     - Override
+   * - direction
+     - the celestial WCS reference coordinate
+     - ``--doppler-phase-centre 'RA,Dec'``
+   * - epoch
+     - ``MJD-OBS``, else ``DATE-OBS``
+     - ``--doppler-time`` (ISO or MJD)
+   * - track length
+     - nothing standard records it
+     - ``--doppler-obs-duration``
+   * - position
+     - ``OBSGEO-X/Y/Z``, else ``TELESCOP``
+     - ``--doppler-telescope``
+
+Both the continuum and line cubes are written on the corrected grid, so the pair stays recombinable, and the spectral WCS is rewritten with the new ``SPECSYS``. Stale velocity keywords (``ALTRVAL``, ``ALTRPIX``, ``VELREF``) are dropped rather than left describing the old grid. ``--doppler-frame source`` needs ``--doppler-source-vel``, since a cube has no ``SOURCE::SYSVEL`` to fall back on.
+
+The spectral axis must be ``NAXIS3``; a cube with it elsewhere is refused with a message saying so.

@@ -80,6 +80,23 @@ _CHAIN = {
     "source": (),
 }
 
+#: FITS ``SPECSYS`` names for each frame (FITS WCS Paper III, table 29).
+#: Distinct from :data:`FRAME_CODES`, which is the MS ``MEAS_FREQ_REF`` integer
+#: convention -- the two describe the same frames in different file formats and
+#: must not be substituted for one another.
+FITS_SPECSYS = {
+    "topo": "TOPOCENT",
+    "geo": "GEOCENTR",
+    "bary": "BARYCENT",
+    "lsrk": "LSRK",
+    "lsrd": "LSRD",
+    "galacto": "GALACTOC",
+    "lgroup": "LOCALGRP",
+    "cmb": "CMBDIPOL",
+    # A source-frame grid is a rest-frame grid; FITS spells that SOURCE.
+    "source": "SOURCE",
+}
+
 #: Frequency units accepted in an explicit channel-grid specification.
 _FREQ_UNITS = {"hz": 1.0, "khz": 1e3, "mhz": 1e6, "ghz": 1e9}
 
@@ -307,6 +324,54 @@ def resample_map(freqs_in, factor, freqs_out, interpolation="nearest"):
         valid = (frac >= 0.0) & (frac <= 1.0)
 
     return indices, weights, valid
+
+
+def resample_cube(data, factor, freqs_in, freqs_out, axis, interpolation="nearest"):
+    """Resample a cube along its spectral axis onto a fixed output grid.
+
+    The image-plane counterpart of :func:`regrid_rows`. A cube has already been
+    integrated over time, so a single Doppler factor applies to all of it rather
+    than one per row. Output channels the input band does not cover are set to
+    NaN, which is the image-plane equivalent of raising a flag.
+
+    Note what this cannot do: the observatory's line-of-sight velocity drifts
+    during a track, and imaging has already summed over that drift. Shifting the
+    axis afterwards re-centres the spectrum but cannot undo the smearing, so this
+    is only equivalent to :func:`regrid_rows` when the drift over the observation
+    is small compared to a channel.
+
+    Args:
+        data (np.ndarray|dask.array): Cube of any dimensionality.
+        factor (float): Doppler factor for the observation.
+        freqs_in (np.ndarray): Topocentric input channel frequencies in Hz.
+        freqs_out (np.ndarray): Output channel frequencies in Hz, in the target
+            frame.
+        axis (int): Index of the spectral axis of ``data``.
+        interpolation (str): ``'nearest'`` or ``'linear'``.
+
+    Returns:
+        np.ndarray|dask.array: ``data`` with its spectral axis replaced by
+        ``freqs_out``.
+    """
+    indices, weights, valid = resample_map(freqs_in, factor, freqs_out, interpolation)
+
+    # Broadcast per-channel vectors against the spectral axis alone.
+    shape = [1] * np.ndim(data)
+    shape[axis] = -1
+
+    # Nearest weights are all 1, so skipping the multiply there keeps a float32
+    # cube float32 instead of promoting it against float64 coefficients.
+    dtype = np.result_type(data.dtype, np.float32)
+
+    resampled = None
+    for k in range(indices.shape[1]):
+        contribution = np.take(data, indices[:, k], axis=axis)
+        if interpolation != "nearest":
+            contribution = contribution * weights[:, k].reshape(shape).astype(dtype)
+        resampled = contribution if resampled is None else resampled + contribution
+
+    # np.where rather than masked assignment, so this stays lazy under dask.
+    return np.where(valid.reshape(shape), resampled, np.nan)
 
 
 def regrid_rows(data, flags, weights, factors, freqs_in, freqs_out, interpolation="nearest"):

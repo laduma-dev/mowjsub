@@ -5,7 +5,52 @@ project's former name, **contsub**.
 
 ## Unreleased (2.0rc2)
 
+### Changed
+
+- **`vis-mowjsub --output-column` no longer defaults to `LINE_DATA`.** It is now
+  required. `LINE_DATA` is not an MS-standard column name, and defaulting to it
+  pushed a non-standard name into every tool downstream of the result. There is
+  no standard name for continuum-subtracted visibilities, so mowjsub no longer
+  invents one; pass `--output-column DATA` for the common case of feeding an
+  imager directly. This is a breaking CLI change, taken during the 2.0 release
+  candidates rather than after.
+
+  Dropping the default exposed a hazard it had been hiding: without
+  `--output-ms` the residual is written back into the input MS, so
+  `--output-column DATA` there would overwrite the visibilities the fit was made
+  from. That combination is now refused.
+
+- **An already-regridded MS is refused rather than corrected twice.**
+  `doppler_regrid_dataset` checks `SPECTRAL_WINDOW::MEAS_FREQ_REF` and requires a
+  topocentric input grid. This closes a live hole in `vis-mowjsub
+  --doppler-frame`, which would previously have applied the frame conversion on
+  top of one CASA `mstransform` had already applied.
+
 ### Added
+
+- **`doppler-mowjsub`, the Doppler correction as a standalone command.** The same
+  `--doppler-*` parameters `vis-mowjsub` takes, over an MS whose continuum has
+  already been subtracted. This lets a pipeline run continuum subtraction and the
+  frame transformation as separate stages while keeping them in the right order —
+  previously the correction was only reachable *through* a contsub run, so a
+  workflow that wanted the two separate had to run the regrid elsewhere, and if
+  it landed first the continuum was then fitted across an interpolated grid.
+  `vis-mowjsub --doppler-frame` is unchanged and remains the convenient default;
+  `tests/test_doppler.py::TestStandaloneDoppler::test_matches_the_fused_single_pass`
+  pins the two against each other.
+
+- **`im-mowjsub --doppler-frame`, Doppler correction in the image plane.**
+  Applied to both output cubes after the fit, so it is one interpolation at the
+  very end and nothing downstream inherits a correlated channel grid. The catch is
+  physical, not implementational: the Doppler factor is time-dependent, and a cube
+  has already been integrated over time, so only a single factor can be applied
+  and the intra-track smearing is unrecoverable. Safe when the drift over the
+  observation is much smaller than a channel; `--doppler-obs-duration` makes
+  mowjsub compute the drift, log it against the channel width and warn past a
+  tenth of a channel. Unambiguously right for placing several observations on one
+  grid for stacking, which is a pure shift per cube. Cube metadata is resolved
+  from the header with `--doppler-time`, `--doppler-telescope` and
+  `--doppler-phase-centre` as overrides. Requires the spectral axis on `NAXIS3`.
 
 - **Doppler correction for the visibility plane.** `--doppler-frame` resamples
   continuum-subtracted visibilities onto a channel grid fixed in a chosen
