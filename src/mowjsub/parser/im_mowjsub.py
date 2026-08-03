@@ -1,19 +1,18 @@
-import glob
-import os
-import time
+from __future__ import annotations
 
-import click
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal
+
 import dask
 import dask.array as da
 import numpy as np
+import shinobi
 import xarray as xr
-from omegaconf import OmegaConf
-from scabha import init_logger
-from scabha.basetypes import File
-from scabha.schema_utils import clickify_parameters, paramfile_loader
+from pydantic import Field
 
-import mowjsub
-from mowjsub import BIN
+from mowjsub import BIN, set_logger
 from mowjsub.fitfuncs import (
     FitBSpline,
     FitGCVSpline,
@@ -22,6 +21,7 @@ from mowjsub.fitfuncs import (
     FitPolynomial,
 )
 from mowjsub.image_plane import ContSub
+from mowjsub.parser._cli import make_command
 from mowjsub.utils import (
     apply_cube_doppler,
     get_automask,
@@ -30,42 +30,37 @@ from mowjsub.utils import (
     zds_from_fits,
 )
 
-command = BIN.im_plane
-thisdir = os.path.dirname(__file__)
-source_files = glob.glob(f"{thisdir}/library/*.yaml")
-sources = [File(item) for item in source_files]
-parserfile = File(f"{thisdir}/im_mowjsub.yaml")
-config = paramfile_loader(parserfile, sources)["im_mowjsub"]
+app = BIN.im_plane
 
-log = init_logger(BIN.im_plane)
+FIT_MODELS = Literal["b-spline", "spline", "polynomial", "median-filter", "scipy-median-filter", "gcv-spline"]
+FRAMES = Literal["topo", "geo", "bary", "lsrk", "lsrd", "galacto", "lgroup", "cmb", "source"]
+INTERPOLATIONS = Literal["nearest", "linear"]
+LOG_LEVELS = Literal["info", "debug", "trace", "error", "critical"]
 
 
-@click.command("im-mowjsub")
-@click.version_option(str(mowjsub.__version__))
-@clickify_parameters(config)
-def runit(**kwargs):
+def runit(opts):
     start_time = time.time()
 
-    opts = OmegaConf.create(kwargs)
+    log = set_logger(opts.loglevel)
 
     if opts.cont_fit_tol > 100:
         log.warning("Requested --cont-fit-tol is larger than 100 percent. Assuming it is 100.")
         opts.cont_fit_tol = 100
 
-    infits = File(opts.input_image)
+    infits = Path(opts.input_image)
 
     if opts.output_prefix:
-        prefix = opts.output_prefix
+        prefix = str(opts.output_prefix)
     else:
-        prefix = f"{infits.BASEPATH}-contsub"
+        prefix = f"{infits.with_suffix('')}-contsub"
 
-    outcont = File(f"{prefix}-cont.fits")
-    outline = File(f"{prefix}-line.fits")
+    outcont = Path(f"{prefix}-cont.fits")
+    outline = Path(f"{prefix}-line.fits")
 
-    if opts.overwrite is False and (outcont.EXISTS or outline.EXISTS):
+    if opts.overwrite is False and (outcont.exists() or outline.exists()):
         raise RuntimeError("At least one output file exists, but --no-overwrite has been set. Unset it to proceed.")
 
-    if opts.fit_model in ("b-spline", "spline", "polynomial") and getattr(opts, "order", None) is None:
+    if opts.fit_model in ("b-spline", "spline", "polynomial") and opts.order is None:
         raise RuntimeError(f"The parameter 'order' is required for fit-model={opts.fit_model}.")
 
     velwidth = opts.vel_width or opts.segments
@@ -82,7 +77,7 @@ def runit(**kwargs):
 
     rest_freq = opts.rest_freq
     zds = zds_from_fits(
-        infits.PATH,
+        str(infits),
         chunks=chunks,
         rest_freq=rest_freq,
         hdu_idx=opts.hdu_index,
@@ -103,8 +98,8 @@ def runit(**kwargs):
         cube = zds.DATA
 
     nomask = True
-    if getattr(opts, "mask_image", None):
-        mask = zds_from_fits(opts.mask_image, chunks=chunks, rest_freq=rest_freq).DATA
+    if opts.mask_image:
+        mask = zds_from_fits(str(opts.mask_image), chunks=chunks, rest_freq=rest_freq).DATA
         nomask = False
 
     signature = f"({dims_string}),({dims_string}) -> ({dims_string})"
@@ -119,21 +114,17 @@ def runit(**kwargs):
 
     if opts.fit_model in ["spline", "b-spline"]:
         fitfunc = FitBSpline(xspec, order=opts.order, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
-        fitfunc.prepare()
     elif opts.fit_model == "polynomial":
         fitfunc = FitPolynomial(xspec, order=opts.order, fit_tol=opts.cont_fit_tol)
-        fitfunc.prepare()
     elif opts.fit_model == "median-filter":
         fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
-        fitfunc.prepare()
     elif opts.fit_model == "scipy-median-filter":
         fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
-        fitfunc.prepare()
     elif opts.fit_model == "gcv-spline":
         fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=opts.cont_fit_tol)
-        fitfunc.prepare()
     else:
         raise RuntimeError(f"Unsupported fit-model: {opts.fit_model!r}.")
+    fitfunc.prepare()
 
     get_mask = da.gufunc(
         lambda _data: get_automask(_data, fitfunc, opts.sigma_clip),
@@ -186,7 +177,7 @@ def runit(**kwargs):
     line = zds.DATA.transpose(*zds.attrs["fits_dims"]).data - continuum
 
     if not opts.doppler_frame:
-        outputs = [(outcont.PATH, continuum, header), (outline.PATH, line, header)]
+        outputs = [(str(outcont), continuum, header), (str(outline), line, header)]
     else:
         source_vel = opts.doppler_source_vel
         plan = plan_cube_doppler(
@@ -203,8 +194,8 @@ def runit(**kwargs):
         # One plan for both cubes, so the pair stays on a single grid and
         # remains recombinable.
         outputs = [
-            (outcont.PATH, *apply_cube_doppler(continuum, header, plan, opts.doppler_interpolation)),
-            (outline.PATH, *apply_cube_doppler(line, header, plan, opts.doppler_interpolation)),
+            (str(outcont), *apply_cube_doppler(continuum, header, plan, opts.doppler_interpolation)),
+            (str(outline), *apply_cube_doppler(line, header, plan, opts.doppler_interpolation)),
         ]
 
     log.info(f"Writing continuum model cube to: {outcont}")
@@ -219,3 +210,115 @@ def runit(**kwargs):
     mins = dtime / 60 - hours * 60
     secs = (mins % 1) * 60
     log.info(f"Finished. Runtime {hours}:{int(mins)}:{secs:.1f}")
+
+
+@shinobi.pystep(name=app, info="Perform image plane continuum subtraction on an input FITS file")
+def im_mowjsub(
+    input_image: Path = Field(..., description="Input image"),
+    output_prefix: str | None = Field(None, description="Name of ouput image"),
+    mask_image: Path | None = Field(None, description="Mask image"),
+    sigma_clip: list[float] | None = Field(None, description="Sigma clip for each iteration. Only required if mask-image is not given."),
+    automask_per_iter: bool = Field(False, description="Generate a new mask per iteration."),
+    fit_model: FIT_MODELS = Field(
+        "b-spline",
+        description=(
+            "Fit function to model the continuum. The 'scipy-median-filter' model is much faster than 'median-filter', but treats band "
+            "edges and masked channels differently, so the two do not give identical continuum models. WARNING: A median-filter continuum "
+            "model may subsume low SNR line emission, use it with great care."
+        ),
+    ),
+    order: int | None = Field(None, description="Order of spline/polynomial or number of top coefficients to use for DCT reconstruction"),
+    vel_width: float | None = Field(None, description="Width of spline segments or median filter window in km/s."),
+    chan_width: int | None = Field(None, description="Width of spline segments or median filter window in number of channels."),
+    gcv_lambda: float | None = Field(
+        None,
+        description=(
+            "GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset the parameter "
+            "will be estimated using the GCV criterion; this can be very slow. Experience suggests that values chanwidth/nchan work best."
+        ),
+    ),
+    segments: float | None = Field(
+        None,
+        description=(
+            "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter "
+            "window in km/s. If given as a list, then it must have same size as --order."
+        ),
+    ),
+    cont_fit_tol: float = Field(
+        0,
+        description=(
+            "Minimum percentage of valid spectrum data points required to do a fit. Spectra below this tolerance will be set to NaN. "
+            "Leaving this unset may result in poor or NaN spectra in the output cubes"
+        ),
+    ),
+    overwrite: bool = Field(True, description="Overwrite output image if it already exists"),
+    stokes_index: int = Field(0, description="Index of stokes channel (zero-based) to use."),
+    rest_freq: float | None = Field(None, description="Cube rest frequency in MHz. Will ignore the one in the FITS header if it exists."),
+    stokes_axis: bool = Field(True, description="### DEPRECATED #### Set this flag if the input image has a stokes dimension. (Default is True)."),
+    hdu_index: int = Field(0, description="FITS primary HDU index", json_schema_extra={"abbreviation": "hi"}),
+    ra_chunks: int = Field(64, description="Chunking along RA-axis. If set to zero, no Chunking is perfomed."),
+    nworkers: int = Field(
+        4,
+        description=("Number of parallel worker threads (roughly one per CPU core). Runtime for fitting-bound models scales with this, so raise it to speed up large cubes."),
+    ),
+    loglevel: LOG_LEVELS = Field("info", description="Log level for the output"),
+    doppler_frame: FRAMES | None = Field(
+        None,
+        description=(
+            "Spectral reference frame to Doppler-correct the output cubes to, applied after the continuum fit. A cube has already been "
+            "integrated over time, so only a single correction factor can be applied: this is safe only when the line-of-sight velocity "
+            "drifts by much less than one channel over the observation, and cannot undo smearing from a larger drift. Pass "
+            "--doppler-obs-duration to have that checked. For long tracks, correct in the visibility plane instead (doppler-mowjsub). "
+            "Leave unset to skip Doppler correction."
+        ),
+    ),
+    doppler_chan_grid: str = Field(
+        "auto",
+        description=(
+            "Output channel grid for the Doppler correction. 'auto' derives it from this cube, dropping one guard channel at each end. "
+            "Otherwise give 'nchan,chan0,chanwidth' with frequency units, e.g. '1000,1419.5MHz,26.1kHz'; use this to place several "
+            "observations on one common grid for stacking."
+        ),
+    ),
+    doppler_interpolation: INTERPOLATIONS = Field(
+        "nearest",
+        description=(
+            "Interpolation used when resampling onto the Doppler-corrected grid. 'nearest' leaves channel noise uncorrelated; 'linear' is "
+            "smoother but correlates adjacent channels."
+        ),
+    ),
+    doppler_source_vel: float | None = Field(
+        None,
+        description=(
+            "Systemic radial velocity of the source in km/s, positive for recession. Required with --doppler-frame=source, since a cube carries no SOURCE::SYSVEL to fall back on."
+        ),
+    ),
+    doppler_time: str | None = Field(None, description="Observation epoch for the Doppler correction, as an ISO date or an MJD. Overrides the cube's MJD-OBS or DATE-OBS."),
+    doppler_obs_duration: float | None = Field(
+        None,
+        description=(
+            "Length of the observation in hours. Only used to check how far the line-of-sight velocity drifted over the track, and to take "
+            "the correction at the midpoint rather than the start. Nothing standard records this in a FITS header, so it must be given; "
+            "without it the drift check is skipped."
+        ),
+    ),
+    doppler_telescope: str | None = Field(
+        None,
+        description=(
+            "Observatory name, resolved through astropy's site registry. Overrides the cube's OBSGEO-X/Y/Z or TELESCOP keywords, and is needed when the header carries neither."
+        ),
+    ),
+    doppler_phase_centre: str | None = Field(
+        None,
+        description=("Field centre used to project the observatory velocity, as 'RA,Dec' in degrees or sexagesimal. Overrides the cube's WCS reference coordinate."),
+    ),
+) -> None:
+    opts = SimpleNamespace(**locals())
+    return runit(opts)
+
+
+#: Uniform handle for this module's pystep, so the StepRef can be looked up
+#: generically without knowing the function's own name.
+step = im_mowjsub
+
+command = make_command(im_mowjsub, positional="input_image")

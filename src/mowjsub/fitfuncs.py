@@ -1,17 +1,17 @@
+import logging
 from abc import abstractmethod
 
 import numpy as np
-from scabha import init_logger
 from scipy import fftpack
 from scipy.interpolate import make_smoothing_spline, splev, splrep
 from scipy.ndimage import median_filter
 
 from mowjsub import utils
 
-from . import BIN
+from . import LOGGER
 from .exceptions import BadFitError
 
-log = init_logger(BIN.im_plane)
+log = logging.getLogger(LOGGER)
 
 
 class FitFunc:

@@ -1,14 +1,14 @@
+import logging
 import warnings
 from abc import ABC, abstractmethod
 
 import numpy as np
-from scabha import init_logger
 from scipy import ndimage
 from scipy.signal import convolve
 
-from mowjsub import BIN
+from mowjsub import LOGGER
 
-log = init_logger(BIN.im_plane)
+log = logging.getLogger(LOGGER)
 
 
 class Mask:

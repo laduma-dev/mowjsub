@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import warnings
 from collections import namedtuple
@@ -15,10 +16,9 @@ from astropy.wcs import WCS
 from casacore.tables import table
 from daskms import Dataset, xds_from_ms, xds_from_table
 from fitstoolz.reader import FitsData
-from scabha import init_logger
 from tqdm.dask import TqdmCallback
 
-from mowjsub import BIN
+from mowjsub import LOGGER
 from mowjsub.doppler import (
     FITS_SPECSYS,
     FRAME_CODES,
@@ -36,7 +36,7 @@ from mowjsub.masking import Mask, PixSigmaClip
 warnings.filterwarnings("ignore", message=".*does not have a Zarr V3 specification.*")
 warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently not part.*")
 
-log = init_logger(BIN.im_plane)
+log = logging.getLogger(LOGGER)
 
 
 def get_automask(cube, fitfunc, sigma_clip):

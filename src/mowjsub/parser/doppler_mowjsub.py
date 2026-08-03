@@ -1,39 +1,32 @@
-import glob
-import os
-import time
+from __future__ import annotations
 
-import click
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal
+
 import dask
 import dask.array as da
+import shinobi
 from daskms import xds_from_ms, xds_to_table
-from omegaconf import OmegaConf
-from scabha import init_logger
-from scabha.basetypes import File
-from scabha.schema_utils import clickify_parameters, paramfile_loader
+from pydantic import Field
 from tqdm.dask import TqdmCallback
 
-import mowjsub
-from mowjsub import BIN
+from mowjsub import BIN, set_logger
+from mowjsub.parser._cli import make_command
 from mowjsub.utils import (
     doppler_regrid_dataset,
     finalise_regridded_ms,
     get_ds_from_msdsl,
 )
 
-log = init_logger(BIN.doppler_plane)
+app = BIN.doppler_plane
 
-command = BIN.doppler_plane
-thisdir = os.path.dirname(__file__)
-source_files = glob.glob(f"{thisdir}/library/*.yaml")
-sources = [File(item) for item in source_files]
-parserfile = File(f"{thisdir}/doppler_mowjsub.yaml")
-config = paramfile_loader(parserfile, sources)["doppler_mowjsub"]
+FRAMES = Literal["topo", "geo", "bary", "lsrk", "lsrd", "galacto", "lgroup", "cmb", "source"]
+INTERPOLATIONS = Literal["nearest", "linear"]
 
 
-@click.command("doppler-mowjsub")
-@click.version_option(str(mowjsub.__version__))
-@clickify_parameters(config)
-def runit(**kwargs):
+def runit(opts):
     """Doppler-correct an MS whose continuum has already been subtracted.
 
     This is the standalone half of what ``vis-mowjsub --doppler-frame`` does in
@@ -44,7 +37,7 @@ def runit(**kwargs):
     """
     start_time = time.time()
 
-    opts = OmegaConf.create(kwargs)
+    log = set_logger()
     ms = opts.ms
     spwid = opts.spwid
     fieldid = opts.field_id
@@ -96,3 +89,70 @@ def runit(**kwargs):
     mins = dtime / 60 - hours * 60
     secs = (mins % 1) * 60
     log.info(f"Runtime {hours}:{int(mins)}:{secs:.1f}")
+
+
+@shinobi.pystep(
+    name=app,
+    info="Doppler-correct an already continuum-subtracted Measurement Set (MS) onto a channel grid fixed in a chosen spectral frame",
+)
+def doppler_mowjsub(
+    ms: Path = Field(..., description="Input MS file. Its continuum must already have been subtracted; this command does no fitting."),
+    input_column: str = Field(
+        ...,
+        description=(
+            "Column holding the continuum-subtracted data to Doppler-correct. Required: there is no standard MS column name for "
+            "continuum-subtracted visibilities, so this is whatever the subtraction stage was told to write."
+        ),
+    ),
+    output_column: str = Field(
+        ...,
+        description="Column name to write the Doppler-corrected data to in the output MS. Pass DATA if the imager you feed it to expects that column.",
+    ),
+    output_ms: Path = Field(
+        ...,
+        description=("Name of the MS to write. Required, since the Doppler correction changes the channel count and so cannot be written back into a column of the input MS."),
+    ),
+    spwid: int = Field(0, description="Spectral Window ID"),
+    field_id: int = Field(0, description="Field ID"),
+    row_chunks: int = Field(10000, description="Chunking strategy (Done along the time axis)"),
+    nworkers: int = Field(4, description="Number of parallel worker threads (roughly one per CPU core)."),
+    doppler_frame: FRAMES = Field(
+        ...,
+        description=(
+            "Spectral reference frame to Doppler-correct the output to. The visibilities are resampled onto a channel grid fixed in this "
+            "frame, as CASA mstransform does with regridms=True. The input channel grid must still be topocentric, i.e. as it came off the "
+            "telescope."
+        ),
+    ),
+    doppler_chan_grid: str = Field(
+        "auto",
+        description=(
+            "Output channel grid for the Doppler correction. 'auto' derives the grid that every timestamp of this observation covers. "
+            "Otherwise give 'nchan,chan0,chanwidth' with frequency units, e.g. '1000,1419.5MHz,26.1kHz'; use this to place several MSs on "
+            "one common grid, since 'auto' only ever sees a single MS."
+        ),
+    ),
+    doppler_interpolation: INTERPOLATIONS = Field(
+        "nearest",
+        description=(
+            "Interpolation used when resampling onto the Doppler-corrected grid. 'nearest' is what caracal asks of CASA mstransform and "
+            "leaves channel noise uncorrelated; 'linear' is smoother but correlates adjacent channels."
+        ),
+    ),
+    doppler_source_vel: float | None = Field(
+        None,
+        description=(
+            "Systemic radial velocity of the source in km/s, positive for recession. Only used with --doppler-frame=source; when unset it "
+            "is read from the MS SOURCE::SYSVEL column."
+        ),
+    ),
+) -> None:
+    opts = SimpleNamespace(**locals())
+    return runit(opts)
+
+
+#: Uniform handle for this module's pystep, so the StepRef can be looked up
+#: generically without knowing the function's own name.
+step = doppler_mowjsub
+
+command = make_command(doppler_mowjsub, positional="ms")

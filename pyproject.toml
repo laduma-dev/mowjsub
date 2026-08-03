@@ -16,7 +16,10 @@ dependencies = [
 	"astropy",
 	"scipy",
 	"xarray",
-	"scabha>=2.2.0rc2",
+	# Stimela 3. Each entry point is a `@shinobi.pystep` whose typed signature
+	# is the schema, replacing scabha's YAML parser configs.
+	"stimela-ninja>=0.1.0b5",
+	"pydantic>=2.6",
 	"zarr",
 	"tqdm",
 	"dask-ms",
@@ -52,9 +55,9 @@ include = [
 packages = ["src/mowjsub"]
 
 [project.scripts]
-im-mowjsub = "mowjsub.parser.im_mowjsub:runit"
-vis-mowjsub = "mowjsub.parser.vis_mowjsub:runit"
-doppler-mowjsub = "mowjsub.parser.doppler_mowjsub:runit"
+im-mowjsub = "mowjsub.parser.im_mowjsub:command"
+vis-mowjsub = "mowjsub.parser.vis_mowjsub:command"
+doppler-mowjsub = "mowjsub.parser.doppler_mowjsub:command"
 
 [dependency-groups]
 # Everything needed to develop and test. `dev` is uv's default group, so a plain

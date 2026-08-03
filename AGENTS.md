@@ -53,9 +53,9 @@ Linting config is in `ruff.toml`: line length 180, target Python 3.11, isort ena
 
 ### Processing pipelines
 
-**Image plane** (`im-mowjsub`): Operates on FITS spectral cubes. Loads the cube via `xarray-fits` into an `xr.Dataset` with dims `[ra, dec, spectral]`, chunks along RA using Dask, fits a continuum baseline per-pixel per-spectrum, and writes two FITS outputs: `*-cont.fits` (continuum model) and `*-line.fits` (residual). Entry point: `mowjsub/parser/im_mowjsub.py:runit`.
+**Image plane** (`im-mowjsub`): Operates on FITS spectral cubes. Loads the cube via `fitstoolz.FitsData` into an `xr.Dataset` with dims `[ra, dec, spectral]`, chunks along RA using Dask, fits a continuum baseline per-pixel per-spectrum, and writes two FITS outputs: `*-cont.fits` (continuum model) and `*-line.fits` (residual). Entry point: `mowjsub/parser/im_mowjsub.py` (`command` for the CLI, `runit` for the work).
 
-**Visibility plane** (`vis-mowjsub`): Operates on CASA Measurement Sets. Reads via `dask-ms`, reshapes row-based data to `[time, baseline, freq, corr]`, fits per-baseline-per-correlation, and writes the result back to an MS column. Optionally applies a Doppler correction on the way out (see below). Entry point: `mowjsub/parser/vis_mowjsub.py:runit`.
+**Visibility plane** (`vis-mowjsub`): Operates on CASA Measurement Sets. Reads via `dask-ms`, reshapes row-based data to `[time, baseline, freq, corr]`, fits per-baseline-per-correlation, and writes the result back to an MS column. Optionally applies a Doppler correction on the way out (see below). Entry point: `mowjsub/parser/vis_mowjsub.py` (`command` for the CLI, `runit` for the work).
 
 ### Doppler correction (`mowjsub/doppler.py`)
 
@@ -129,20 +129,35 @@ im_mowjsub.py:runit
 
 This replaced a `subtract_fits` that took *paths*: it wrote the continuum, then read it straight back alongside the input to form the residual from arrays the caller already had. The Doppler path had to stage a topocentric continuum in `{prefix}-cont-topo.fits` and delete it in a `finally`, purely to satisfy that. Both are gone, and with them the last use of `xarray-fits`, which is no longer a dependency.
 
-### CLI parameter schemas
+### CLI parameters: the signature is the schema
 
-CLI parameters are defined in YAML schemas under `mowjsub/parser/`:
-- `im_mowjsub.yaml` — image-plane parameters
-- `vis_mowjsub.yaml` — visibility-plane parameters
+Each entry point is a `@shinobi.pystep` (Stimela 3) whose **typed signature is the single schema authority**. To add a CLI option, add a parameter to that function — there are no YAML schemas and no Click decorators to keep in step.
 
-These are loaded via `scabha.schema_utils.paramfile_loader` and converted to Click options via `clickify_parameters`. To add a new CLI option, edit the appropriate YAML schema — do not add Click decorators manually.
+```python
+@shinobi.pystep(name=app, info="...")
+def im_mowjsub(
+    input_image: Path = Field(..., description="Input image"),
+    hdu_index: int = Field(0, description="...", json_schema_extra={"abbreviation": "hi"}),
+    fit_model: FIT_MODELS = Field("b-spline", description="..."),
+) -> None:
+    return runit(SimpleNamespace(**locals()))
+```
 
-The stimela integration (`mowjsub/stimelating/`) exposes both tools as stimela cabs (`mowjsub_cabs.yaml`), with parameter files in `im_mowjsub_param.yaml` and `vis_mowjsub_param.yaml`.
+The scabha equivalents map onto it directly: `dtype: File` → `Path`, `choices:` → a `Literal`, `required: yes` → `Field(...)`, `abbreviation:` → `json_schema_extra`, `policies.repeat` → a `list[...]` annotation. `policies.positional` is the one that is not a type: `parser/_cli.py:make_command(step, positional=...)` renders that field as a `click.Argument`, since shinobi's `build_options` only emits `--options`.
+
+Each module exposes three names: `runit(opts)` does the work against a namespace, `step` is the `StepRef` (so a Stimela 3 recipe can use it directly), and `command` is the `click.Command` the console script points at. **The console scripts point at `command`, not `runit`** — `runit` is a plain function now, so tests drive `command` through `CliRunner`.
+
+The callback dispatches through shinobi's `_dispatch`, which propagates an exception from inside the step with its message intact — the error-path tests read those messages, so don't swap it for a bare call.
+
+The Stimela 2 cab YAMLs under `mowjsub/stimelating/` are gone. A pystep *is* a step, so the cabs were a second copy of every parameter with nothing keeping the two honest. A Stimela 2 pipeline that `_include`d `(mowjsub.stimelating)mowjsub_cabs.yaml` needs updating to use the steps directly.
+
+### Logging
+
+One logger, named `mowjsub` (`LOGGER`). Library modules take it with `logging.getLogger` and never attach a handler; an entry point calls `mowjsub.set_logger(level)` once. It used to be a logger per entry point via `scabha.init_logger`, which meant `utils` — shared by all three commands — logged to the image-plane logger whichever command you had actually run.
 
 ### Key dependencies
 
-- `scabha` — logging (`init_logger`), CLI schema utilities (`clickify_parameters`, `paramfile_loader`)
+- `stimela-ninja` (`shinobi`) — Stimela 3: `pystep`, `clickutil.build_options`, step dispatch
+- `pydantic` — the parameter models behind those signatures
+- `fitstoolz` — FITS I/O (`FitsData`); reading cubes, axis naming by WCS
 - `dask-ms` — Measurement Set I/O
-- `xarray-fits` (`xarrayfits`) — FITS I/O into xarray
-- `stimela` — workflow orchestration (optional, for cab-based pipelines)
-- `omegaconf` — config object from CLI kwargs

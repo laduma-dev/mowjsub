@@ -1,21 +1,20 @@
-import glob
-import os
-import time
+from __future__ import annotations
 
-import click
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Literal
+
 import dask
 import dask.array as da
 import numpy as np
+import shinobi
 import xarray as xr
 from daskms import xds_from_ms, xds_to_table
-from omegaconf import OmegaConf
-from scabha import init_logger
-from scabha.basetypes import File
-from scabha.schema_utils import clickify_parameters, paramfile_loader
+from pydantic import Field
 from tqdm.dask import TqdmCallback
 
-import mowjsub
-from mowjsub import BIN
+from mowjsub import BIN, set_logger
 from mowjsub.fitfuncs import (
     FitBSpline,
     FitGCVSpline,
@@ -23,6 +22,7 @@ from mowjsub.fitfuncs import (
     FitMedFilterFast,
     FitPolynomial,
 )
+from mowjsub.parser._cli import make_command
 from mowjsub.utils import (
     copy_ms_subtables,
     doppler_regrid_dataset,
@@ -33,23 +33,17 @@ from mowjsub.utils import (
 )
 from mowjsub.visibility_plane import VisContSub
 
-log = init_logger(BIN.vis_plane)
+app = BIN.vis_plane
 
-command = BIN.vis_plane
-thisdir = os.path.dirname(__file__)
-source_files = glob.glob(f"{thisdir}/library/*.yaml")
-sources = [File(item) for item in source_files]
-parserfile = File(f"{thisdir}/vis_mowjsub.yaml")
-config = paramfile_loader(parserfile, sources)["vis_mowjsub"]
+FIT_MODELS = Literal["b-spline", "spline", "polynomial", "median-filter", "scipy-median-filter", "gcv-spline"]
+FRAMES = Literal["topo", "geo", "bary", "lsrk", "lsrd", "galacto", "lgroup", "cmb", "source"]
+INTERPOLATIONS = Literal["nearest", "linear"]
 
 
-@click.command("vis-mowjsub")
-@click.version_option(str(mowjsub.__version__))
-@clickify_parameters(config)
-def runit(**kwargs):
+def runit(opts):
     start_time = time.time()
 
-    opts = OmegaConf.create(kwargs)
+    log = set_logger()
     ms = opts.ms
     spwid = opts.spwid
     fieldid = opts.field_id
@@ -223,3 +217,100 @@ def runit(**kwargs):
     mins = dtime / 60 - hours * 60
     secs = (mins % 1) * 60
     log.info(f"Runtime {hours}:{int(mins)}:{secs:.1f}")
+
+
+@shinobi.pystep(name=app, info="Perform visibility plane continuum subtraction on an input Measurement Set (MS)")
+def vis_mowjsub(
+    ms: Path = Field(..., description="Input MS file"),
+    input_column: str = Field("DATA", description="Column which contains the data to be continuum subtracted."),
+    output_column: str = Field(
+        ...,
+        description=(
+            "Column name to write the continuum subtracted data to. Required: there is no standard MS column for continuum-subtracted "
+            "visibilities, so naming one is left to you. Pass DATA if the imager you feed the result to expects that column -- but note "
+            "that without --output-ms this writes back into the input MS, so it must differ from --input-column."
+        ),
+    ),
+    fit_model: FIT_MODELS = Field(
+        "b-spline",
+        description=(
+            "Fit function to model the continuum. The 'scipy-median-filter' model is much faster than 'median-filter', but treats band "
+            "edges and masked channels differently, so the two do not give identical continuum models. WARNING: A median-filter continuum "
+            "model may subsume low SNR line emission, use it with great care."
+        ),
+    ),
+    order: int | None = Field(None, description="Order of spline/polynomial or number of top coefficients to use for DCT reconstruction"),
+    vel_width: float | None = Field(None, description="Width of spline segments or median filter window in km/s."),
+    chan_width: int | None = Field(None, description="Width of spline segments or median filter window in number of channels."),
+    gcv_lambda: float | None = Field(
+        None,
+        description=(
+            "GCV spline penalty. Zero is equivalent to an interpolating spline, high values lead to a flatter curve. If unset the parameter "
+            "will be estimated using the GCV criterion; this can be very slow. Experience suggests that values chanwidth/nchan work best."
+        ),
+    ),
+    segments: float | None = Field(
+        None,
+        description=(
+            "## This has been replaced by --vel-width. It will be removed in future releases ## Width of spline segments or median filter "
+            "window in km/s. If given as a list, then it must have same size as --order."
+        ),
+    ),
+    spwid: int = Field(0, description="Spectral Window ID"),
+    field_id: int = Field(0, description="Field ID"),
+    row_chunks: int = Field(10000, description="Chunking strategy (Done along the time axis)"),
+    time_chunks: int = Field(64, description="Chunk size for time axis"),
+    bl_chunks: int = Field(10, description="Chunk size for baseline axis"),
+    cont_fit_tol: float = Field(
+        0,
+        description=(
+            "Minimum percentage of valid spectrum data points required to do a fit. If the percentage of data points is below this percentage, original data will be returned."
+        ),
+    ),
+    nworkers: int = Field(
+        4,
+        description=("Number of parallel worker threads (roughly one per CPU core). Runtime for fitting-bound models scales with this, so raise it to speed up large datasets."),
+    ),
+    output_ms: Path | None = Field(None, description="If provided, write the output to a new MS with this name. Otherwise, add new column to the input MS."),
+    load_from_cache: Path | None = Field(None, description="Load the MS from a cache (give Zarr file name) if available, otherwise create it."),
+    doppler_frame: FRAMES | None = Field(
+        None,
+        description=(
+            "Spectral reference frame to Doppler-correct the output to. When set, the continuum-subtracted visibilities are resampled onto "
+            "a channel grid fixed in this frame, as CASA mstransform does with regridms=True. The continuum is always fitted on the native "
+            "topocentric grid first, so the fit sees the bandpass structure where it is stationary. Requires --output-ms, since the output "
+            "channel grid differs from the input. Leave unset to skip Doppler correction."
+        ),
+    ),
+    doppler_chan_grid: str = Field(
+        "auto",
+        description=(
+            "Output channel grid for the Doppler correction. 'auto' derives the grid that every timestamp of this observation covers. "
+            "Otherwise give 'nchan,chan0,chanwidth' with frequency units, e.g. '1000,1419.5MHz,26.1kHz'; use this to place several MSs on "
+            "one common grid, since 'auto' only ever sees a single MS."
+        ),
+    ),
+    doppler_interpolation: INTERPOLATIONS = Field(
+        "nearest",
+        description=(
+            "Interpolation used when resampling onto the Doppler-corrected grid. 'nearest' is what caracal asks of CASA mstransform and "
+            "leaves channel noise uncorrelated; 'linear' is smoother but correlates adjacent channels."
+        ),
+    ),
+    doppler_source_vel: float | None = Field(
+        None,
+        description=(
+            "Systemic radial velocity of the source in km/s, positive for recession. Only used with --doppler-frame=source; when unset it "
+            "is read from the MS SOURCE::SYSVEL column."
+        ),
+    ),
+) -> None:
+    opts = SimpleNamespace(**locals())
+    return runit(opts)
+
+
+#: Uniform handle for this module's pystep, so the StepRef can be looked up
+#: generically without knowing the function's own name.
+step = vis_mowjsub
+
+command = make_command(vis_mowjsub, positional="ms")

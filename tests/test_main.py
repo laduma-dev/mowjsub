@@ -9,7 +9,6 @@ import astropy.io.fits as fitsio
 import dask
 import dask.array as da
 import numpy as np
-from scabha import init_logger
 
 from mowjsub import utils
 from mowjsub.fitfuncs import (
@@ -20,8 +19,6 @@ from mowjsub.fitfuncs import (
     FitPolynomial,
     # FitDCT,
 )
-
-log = init_logger("mowjsub")
 
 
 class TestFitsFunc(unittest.TestCase):
