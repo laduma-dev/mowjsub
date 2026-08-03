@@ -157,4 +157,4 @@ A cube carries far less metadata than an MS, so the correction is resolved from 
 
 Both the continuum and line cubes are written on the corrected grid, so the pair stays recombinable, and the spectral WCS is rewritten with the new ``SPECSYS``. Stale velocity keywords (``ALTRVAL``, ``ALTRPIX``, ``VELREF``) are dropped rather than left describing the old grid. ``--doppler-frame source`` needs ``--doppler-source-vel``, since a cube has no ``SOURCE::SYSVEL`` to fall back on.
 
-The spectral axis must be ``NAXIS3``; a cube with it elsewhere is refused with a message saying so.
+The spectral axis must be ``NAXIS3``, i.e. the axis order must be ``RA, DEC, FREQ[, STOKES]``. A cube with STOKES on ``NAXIS3`` and FREQ on ``NAXIS4`` is refused with a message saying so, whether or not a Doppler correction was asked for -- that layout is unsupported throughout :command:`im-mowjsub`, not just here. Reorder the axes (CASA ``imtrans``) and try again.

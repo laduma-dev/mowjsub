@@ -345,6 +345,26 @@ class TestEndToEnd(unittest.TestCase):
 
         assert line.exists()
 
+    def test_an_unsupported_axis_order_is_refused_clearly(self):
+        """Whether or not Doppler is asked for: the axis order is the problem."""
+        swapped = self.tmpdir / "swapped.fits"
+        header = _header(spectral_axis=4)
+        # C order is reversed: FREQ, STOKES, DEC, RA.
+        fitsio.PrimaryHDU(np.ones((32, 1, 4, 4), dtype=np.float32), header=header).writeto(swapped)
+
+        for extra in ([], ["--doppler-frame", "bary"]):
+            result = CliRunner().invoke(
+                runit,
+                [str(swapped), "--output-prefix", str(self.tmpdir / "sw"), "--fit-model", "polynomial", "--order", "2", *extra],
+                catch_exceptions=True,
+            )
+
+            assert result.exit_code != 0
+            # Not the bare "conflicting sizes for dimension 'spectral'" that
+            # xds_from_fits raises if this is left to fail on its own.
+            assert "NAXIS3" in str(result.exception), extra
+            assert "NAXIS4" in str(result.exception), extra
+
     def test_source_frame_without_a_velocity_is_refused(self):
         result, _, _ = self._run("--doppler-frame", "source")
 

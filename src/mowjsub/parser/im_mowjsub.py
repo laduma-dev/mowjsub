@@ -24,6 +24,7 @@ from mowjsub.fitfuncs import (
 from mowjsub.image_plane import ContSub
 from mowjsub.utils import (
     apply_cube_doppler,
+    cube_spectral_axis,
     get_automask,
     plan_cube_doppler,
     subtract_fits,
@@ -79,6 +80,11 @@ def runit(**kwargs):
     ra_chunks = opts.ra_chunks
     # Zero disables chunking, i.e. the RA axis is read as a single block.
     chunks = dict(ra=ra_chunks or -1, dec=None, spectral=None)
+
+    # Check the axis order up front. zds_from_fits would otherwise reach it
+    # first and fail as a dimension clash between FREQS and DATA, which says
+    # nothing about the actual problem.
+    cube_spectral_axis(fitsio.getheader(infits.PATH, opts.hdu_index))
 
     rest_freq = opts.rest_freq
     zds = zds_from_fits(
