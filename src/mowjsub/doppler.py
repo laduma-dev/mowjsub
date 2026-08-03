@@ -220,7 +220,26 @@ def common_channel_grid(freqs, factors):
     chan0 += width
     chanl -= width
 
-    nchan = int(np.floor((chanl - chan0) / width)) + 1
+    steps = (chanl - chan0) / width
+
+    # Snap to the integer before flooring. When every timestamp shares one
+    # Doppler factor -- which is always true of a cube, and true of a short
+    # track -- the factor cancels out of this ratio, so the span is a whole
+    # number of channels in real arithmetic. Multiplying ~1e9 Hz by the factor
+    # first leaves the division a few ULPs either side of it, and on the low
+    # side floor() charges a whole channel for the rounding: an `auto` grid came
+    # out `nchan_in - 3` instead of `nchan_in - 2` for about half of all
+    # factors, unpredictably.
+    #
+    # The observed error is ~4e-13 channels, so a tolerance of 1e-6 is orders of
+    # magnitude clear of the noise while staying far below any trimming that
+    # means anything -- and a real drift lands whole channels short of the
+    # integer, not a millionth of one.
+    nearest = np.round(steps)
+    if abs(steps - nearest) < 1e-6:
+        steps = nearest
+
+    nchan = int(np.floor(steps)) + 1
     if nchan < 1:
         raise ValueError("Doppler shift over this observation exceeds the bandwidth, leaving no common channel grid. Pass an explicit grid via --doppler-chan-grid.")
 
