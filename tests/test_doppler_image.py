@@ -98,19 +98,14 @@ class TestSpectralAxis(unittest.TestCase):
     def test_naxis3_is_accepted(self):
         assert cube_spectral_axis(_header()) == 2
 
-    def test_a_spectral_axis_elsewhere_is_refused(self):
-        """Stated limitation: the continuum write-back assumes NAXIS3.
+    def test_a_spectral_axis_elsewhere_is_returned_not_refused(self):
+        """A lookup, not a check.
 
-        The spectral grid no longer does -- see
-        ``TestSpectralFrequencies.test_a_swapped_axis_order_is_read_correctly``
-        -- so this guard is all that stands between a swapped cube and the fixed
-        transpose in ``im_mowjsub.runit``.
+        This used to refuse anything but NAXIS3, because the continuum
+        write-back placed its axes by fixed transpose. It goes by name now, so
+        every path here is order-agnostic.
         """
-        with self.assertRaises(RuntimeError) as raised:
-            cube_spectral_axis(_header(spectral_axis=4))
-
-        assert "NAXIS3" in str(raised.exception)
-        assert "NAXIS4" in str(raised.exception)
+        assert cube_spectral_axis(_header(spectral_axis=4)) == 3
 
     def test_a_cube_with_no_spectral_axis_is_refused(self):
         header = _header()
@@ -420,25 +415,68 @@ class TestEndToEnd(unittest.TestCase):
 
         assert line.exists()
 
-    def test_an_unsupported_axis_order_is_refused_clearly(self):
-        """Whether or not Doppler is asked for: the axis order is the problem."""
+    def test_a_swapped_axis_order_runs_and_writes_that_order_back(self):
+        """CTYPE3=STOKES, CTYPE4=FREQ: legal, and what CASA exportfits can emit.
+
+        This used to be refused outright. Axes are matched by what the WCS calls
+        them on the way in and placed by name on the way out, so the layout
+        survives the round trip rather than being reordered or rejected.
+        """
         swapped = self.tmpdir / "swapped.fits"
         header = _header(spectral_axis=4)
         # C order is reversed: FREQ, STOKES, DEC, RA.
-        fitsio.PrimaryHDU(np.ones((32, 1, 4, 4), dtype=np.float32), header=header).writeto(swapped)
+        data = np.ones((32, 1, 4, 4), dtype=np.float32)
+        data[10] = 10.0
+        fitsio.PrimaryHDU(data, header=header).writeto(swapped)
 
         for extra in ([], ["--doppler-frame", "bary"]):
+            prefix = str(self.tmpdir / f"sw{len(extra)}")
             result = CliRunner().invoke(
                 runit,
-                [str(swapped), "--output-prefix", str(self.tmpdir / "sw"), "--fit-model", "polynomial", "--order", "2", *extra],
+                [str(swapped), "--output-prefix", prefix, "--fit-model", "polynomial", "--order", "2", *extra],
                 catch_exceptions=True,
             )
 
-            assert result.exit_code != 0
-            # Not the bare "conflicting sizes for dimension 'spectral'" that
-            # xds_from_fits raises if this is left to fail on its own.
-            assert "NAXIS3" in str(result.exception), extra
-            assert "NAXIS4" in str(result.exception), extra
+            assert result.exit_code == 0, f"{extra}: {result.output}{result.exception}"
+
+            for path in (Path(f"{prefix}-cont.fits"), Path(f"{prefix}-line.fits")):
+                with fitsio.open(path) as hdul:
+                    out = hdul[0].header
+                    # The file's own layout, not a normalised one.
+                    assert out["CTYPE3"] == "STOKES", extra
+                    assert out["CTYPE4"] == "FREQ", extra
+                    assert out["NAXIS3"] == 1, extra
+                    assert hdul[0].data.shape[1] == 1, extra
+                    # The spectral axis is NAXIS4, so it is outermost in C order.
+                    assert hdul[0].data.shape[0] == out["NAXIS4"], extra
+
+    def test_a_swapped_cube_subtracts_the_same_continuum(self):
+        """The fit must not depend on where the spectral axis sits.
+
+        The same data in the two layouts has to give the same residual, which is
+        what catches an axis being matched positionally somewhere.
+        """
+        rng = np.random.default_rng(4)
+        spectra = rng.normal(loc=5.0, scale=0.1, size=(32, 4, 4)).astype(np.float32)
+
+        normal = self.tmpdir / "normal.fits"
+        fitsio.PrimaryHDU(spectra, header=_header()).writeto(normal)
+
+        swapped = self.tmpdir / "swap.fits"
+        fitsio.PrimaryHDU(spectra[:, np.newaxis], header=_header(spectral_axis=4)).writeto(swapped)
+
+        lines = []
+        for index, path in enumerate((normal, swapped)):
+            prefix = str(self.tmpdir / f"cmp{index}")
+            result = CliRunner().invoke(
+                runit,
+                [str(path), "--output-prefix", prefix, "--fit-model", "polynomial", "--order", "2"],
+                catch_exceptions=True,
+            )
+            assert result.exit_code == 0, result.output
+            lines.append(np.squeeze(fitsio.getdata(f"{prefix}-line.fits")))
+
+        np.testing.assert_allclose(lines[0], lines[1], rtol=1e-5, atol=1e-6)
 
     def test_source_frame_without_a_velocity_is_refused(self):
         result, _, _ = self._run("--doppler-frame", "source")

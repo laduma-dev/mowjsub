@@ -22,8 +22,18 @@ dependencies = [
 	"tqdm",
 	"dask-ms",
 	"dask",
+	# The FITS reader. `>=0.2.1` for `FitsData(hdu=...)`, which is what lets
+	# `--hdu-index` keep working.
+	"fitstoolz>=0.2.1",
 ]
 
+
+# Dev-time override: 0.2.1 is merged upstream but not yet on PyPI, so resolve
+# fitstoolz from that commit until it is released. Delete this table once 0.2.1
+# is published -- the `fitstoolz>=0.2.1` constraint above is what consumers
+# resolve against either way, so nothing else has to change.
+[tool.uv.sources]
+fitstoolz = { url = "https://github.com/shinobi-dosho/fitstoolz/archive/6a560bec2bda6221050a8f620918a7fe1cc85c8a.tar.gz" }
 
 [tool.hatch.build.targets.sdist]
 include = [
