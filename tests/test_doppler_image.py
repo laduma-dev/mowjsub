@@ -15,7 +15,13 @@ from click.testing import CliRunner
 
 from mowjsub.doppler import FITS_SPECSYS, resample_cube
 from mowjsub.parser.im_mowjsub import runit
-from mowjsub.utils import apply_cube_doppler, cube_spectral_axis, plan_cube_doppler
+from mowjsub.utils import (
+    FitsHeader,
+    apply_cube_doppler,
+    cube_spectral_axis,
+    plan_cube_doppler,
+    spectral_frequencies,
+)
 
 # MeerKAT, as ITRF metres, matching tests/test_doppler.py.
 MEERKAT = (5109360.133, 2006852.586, -3238948.127)
@@ -24,11 +30,13 @@ MEERKAT = (5109360.133, 2006852.586, -3238948.127)
 def _header(nchan=32, f0=1.4e9, df=1e6, npix=4, stokes=False, spectral_axis=3):
     """A minimal but WCS-complete spectral cube header.
 
-    NAXIS* are set explicitly because ``FitsHeader.retFreq`` reads ``NAXIS3``
-    straight off the header, without a data array to infer it from.
+    NAXIS* are set explicitly because there is no data array to infer the
+    channel count from; ``spectral_frequencies`` reads it off the header, for
+    whichever axis the WCS says is spectral.
 
-    ``spectral_axis=4`` puts STOKES on NAXIS3 and FREQ on NAXIS4, the layout
-    mowjsub does not support; it exists here only to pin the refusal.
+    ``spectral_axis=4`` puts STOKES on NAXIS3 and FREQ on NAXIS4. The spectral
+    grid handles that layout; ``im-mowjsub`` as a whole still refuses it,
+    because the continuum write-back places its axes by fixed transpose.
     """
     header = fitsio.Header()
     header["CTYPE1"] = "RA---SIN"
@@ -91,7 +99,13 @@ class TestSpectralAxis(unittest.TestCase):
         assert cube_spectral_axis(_header()) == 2
 
     def test_a_spectral_axis_elsewhere_is_refused(self):
-        """Stated limitation: retFreq and the continuum writeback assume NAXIS3."""
+        """Stated limitation: the continuum write-back assumes NAXIS3.
+
+        The spectral grid no longer does -- see
+        ``TestSpectralFrequencies.test_a_swapped_axis_order_is_read_correctly``
+        -- so this guard is all that stands between a swapped cube and the fixed
+        transpose in ``im_mowjsub.runit``.
+        """
         with self.assertRaises(RuntimeError) as raised:
             cube_spectral_axis(_header(spectral_axis=4))
 
@@ -107,6 +121,62 @@ class TestSpectralAxis(unittest.TestCase):
             cube_spectral_axis(header)
 
         assert "no spectral axis" in str(raised.exception)
+
+
+class TestSpectralFrequencies(unittest.TestCase):
+    """The channel grid, read through the low-level WCS.
+
+    Its predecessor -- ``FitsHeader.retFreq`` reading ``NAXIS3`` through the
+    high-level WCS -- was wrong in two ways that these pin: it took the channel
+    count from a fixed axis, and it could not produce a grid at all without an
+    observation time.
+    """
+
+    def test_the_grid_matches_crval_and_cdelt(self):
+        freqs = spectral_frequencies(_header(nchan=32, f0=1.4e9, df=1e6))
+
+        assert freqs.size == 32
+        np.testing.assert_allclose(freqs, 1.4e9 + np.arange(32) * 1e6, rtol=1e-12)
+
+    def test_a_swapped_axis_order_is_read_correctly(self):
+        """STOKES on NAXIS3, FREQ on NAXIS4: the layout that used to give 1 channel."""
+        header = _header(nchan=32, spectral_axis=4)
+        assert header["NAXIS3"] == 1, "the Stokes length the old code would have used"
+
+        freqs = spectral_frequencies(header)
+
+        assert freqs.size == 32
+        np.testing.assert_allclose(freqs, 1.4e9 + np.arange(32) * 1e6, rtol=1e-12)
+
+    def test_no_observation_time_is_needed(self):
+        header = _header()
+        for key in ("DATE-OBS", "MJD-OBS", "TIMESYS"):
+            header.pop(key, None)
+
+        np.testing.assert_allclose(spectral_frequencies(header), 1.4e9 + np.arange(32) * 1e6, rtol=1e-12)
+
+    def test_a_non_si_cunit_still_yields_hz(self):
+        """CUNIT is the header's business; this returns SI either way."""
+        header = _header()
+        header["CUNIT3"], header["CRVAL3"], header["CDELT3"] = "MHz", 1400.0, 1.0
+
+        np.testing.assert_allclose(spectral_frequencies(header), 1.4e9 + np.arange(32) * 1e6, rtol=1e-12)
+
+    def test_a_cube_with_no_spectral_axis_is_refused(self):
+        header = _header()
+        for key in ("CTYPE3", "CRVAL3", "CDELT3", "CRPIX3", "CUNIT3"):
+            header.pop(key, None)
+
+        with self.assertRaises(RuntimeError) as raised:
+            spectral_frequencies(header)
+
+        assert "no spectral axis" in str(raised.exception)
+
+    def test_ret_freq_is_the_same_grid_in_mhz(self):
+        """The fitters work in MHz; keep the two definitions tied together."""
+        header = _header()
+
+        np.testing.assert_allclose(FitsHeader(header).retFreq(), spectral_frequencies(header) / 1e6, rtol=1e-12)
 
 
 class TestPlan(unittest.TestCase):
@@ -165,7 +235,12 @@ class TestPlan(unittest.TestCase):
         assert "doppler-time" in str(raised.exception)
 
     def test_doppler_time_rescues_a_header_with_no_epoch(self):
-        """retFreq needs an obstime of its own, so the override must reach it."""
+        """The epoch is needed for the Doppler factor, and only for that.
+
+        It used to be needed for the channel grid as well, which is why the
+        override had to be resolved before the grid was read. The grid no longer
+        cares; this pins that the factor still honours the override.
+        """
         header = _header()
         header.pop("DATE-OBS", None)
 
