@@ -10,9 +10,9 @@ input-column:
       dtype: str
       default: DATA 
 output-column:
-      info: Column name to write the continuum subtracted data to
+      info: "Column name to write the continuum subtracted data to. Required: there is no standard MS column for continuum-subtracted visibilities, so naming one is left to you. Pass DATA if the imager you feed the result to expects that column -- but note that without --output-ms this writes back into the input MS, so it must differ from --input-column."
       dtype: str
-      default: LINE_DATA  
+      required: yes
 fit-model:
       info: "Fit function to model the continuum. The 'scipy-median-filter' model is much faster than 'median-filter', but treats band edges and masked channels differently, so the two do not give identical continuum models. WARNING: A median-filter continuum model may subsume low SNR line emission, use it with great care."
       dtype: str

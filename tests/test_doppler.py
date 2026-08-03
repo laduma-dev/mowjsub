@@ -312,7 +312,7 @@ class TestEndToEnd(unittest.TestCase):
 
         result = CliRunner().invoke(
             runit,
-            [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-ms", str(output), *extra],
+            [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-column", "LINE_DATA", "--output-ms", str(output), *extra],
             catch_exceptions=True,
         )
         return result
@@ -391,12 +391,243 @@ class TestEndToEnd(unittest.TestCase):
 
         result = CliRunner().invoke(
             runit,
-            [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--doppler-frame", "bary"],
+            [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-column", "LINE_DATA", "--doppler-frame", "bary"],
             catch_exceptions=True,
         )
 
         assert result.exit_code != 0
         assert "output-ms" in str(result.exception)
+
+    def test_output_column_has_no_default(self):
+        """Omitting --output-column must be an error, not a silent LINE_DATA."""
+        from click.testing import CliRunner
+
+        from mowjsub.parser.vis_mowjsub import runit
+
+        result = CliRunner().invoke(
+            runit,
+            [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-ms", str(self.tmpdir / "nope.ms")],
+            catch_exceptions=True,
+        )
+
+        assert result.exit_code != 0
+        assert "output-column" in result.output
+
+    def test_writing_the_input_column_in_place_is_refused(self):
+        """In place, --output-column == --input-column destroys the input."""
+        from click.testing import CliRunner
+
+        from mowjsub.parser.vis_mowjsub import runit
+
+        result = CliRunner().invoke(
+            runit,
+            [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--input-column", "DATA", "--output-column", "DATA"],
+            catch_exceptions=True,
+        )
+
+        assert result.exit_code != 0
+        assert "overwriting it" in str(result.exception)
+
+
+class TestStandaloneDoppler(unittest.TestCase):
+    """doppler-mowjsub over an MS whose continuum has already gone."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = Path(tempfile.mkdtemp(prefix="mowjsub-standalone-"))
+        cls.ms = cls.tmpdir / "test.ms"
+        try:
+            _make_ms(cls.ms)
+        except Exception as exc:  # pragma: no cover
+            shutil.rmtree(cls.tmpdir, ignore_errors=True)
+            raise unittest.SkipTest(f"could not build a test MS: {exc}") from exc
+
+        # The line MS the standalone command is meant to consume: continuum
+        # subtracted on the native topocentric grid, no Doppler correction yet.
+        cls.line_ms = cls.tmpdir / "line.ms"
+        result = cls._contsub(cls.line_ms)
+        if result.exit_code != 0:  # pragma: no cover
+            shutil.rmtree(cls.tmpdir, ignore_errors=True)
+            raise unittest.SkipTest(f"could not build a line MS: {result.output}")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    @classmethod
+    def _contsub(cls, output, *extra):
+        from click.testing import CliRunner
+
+        from mowjsub.parser.vis_mowjsub import runit
+
+        return CliRunner().invoke(
+            runit,
+            [str(cls.ms), "--fit-model", "polynomial", "--order", "2", "--output-column", "LINE_DATA", "--output-ms", str(output), *extra],
+            catch_exceptions=True,
+        )
+
+    def _run(self, ms, output, *extra):
+        from click.testing import CliRunner
+
+        from mowjsub.parser.doppler_mowjsub import runit
+
+        return CliRunner().invoke(
+            runit,
+            [str(ms), "--input-column", "LINE_DATA", "--output-column", "LINE_DATA", "--output-ms", str(output), *extra],
+            catch_exceptions=True,
+        )
+
+    def test_writes_a_regridded_ms(self):
+        from casacore.tables import table
+
+        output = self.tmpdir / "bary.ms"
+        result = self._run(self.line_ms, output, "--doppler-frame", "bary")
+        assert result.exit_code == 0, result.output
+
+        with table(str(output), ack=False) as main:
+            keywords = {k for k, v in main.getkeywords().items() if isinstance(v, str) and v.startswith("Table:")}
+            assert {"ANTENNA", "FIELD", "SPECTRAL_WINDOW", "POLARIZATION", "DATA_DESCRIPTION"} <= keywords
+            assert "FIELD_ID" in main.colnames() and "DATA_DESC_ID" in main.colnames()
+            nchan_out = main.getcol("LINE_DATA").shape[1]
+
+        with table(f"{output}/SPECTRAL_WINDOW", ack=False) as spw:
+            assert spw.getcell("NUM_CHAN", 0) == nchan_out
+            assert spw.getcell("MEAS_FREQ_REF", 0) == FRAME_CODES["bary"]
+            assert nchan_out < 32
+
+    def test_matches_the_fused_single_pass(self):
+        """Subtract-then-correct must equal vis-mowjsub's fused --doppler-frame."""
+        from casacore.tables import table
+
+        fused = self.tmpdir / "fused.ms"
+        assert self._contsub(fused, "--doppler-frame", "bary").exit_code == 0
+
+        split = self.tmpdir / "split.ms"
+        assert self._run(self.line_ms, split, "--doppler-frame", "bary").exit_code == 0
+
+        with table(str(fused), ack=False) as a, table(str(split), ack=False) as b:
+            # Same grid, and the same visibilities on it. Both orders fit on the
+            # topocentric grid and regrid only the residual, so this is exact --
+            # the intermediate MS round-trip preserves complex64.
+            assert np.array_equal(a.getcol("LINE_DATA"), b.getcol("LINE_DATA"))
+            assert np.array_equal(a.getcol("FLAG"), b.getcol("FLAG"))
+
+    def test_explicit_grid_is_honoured(self):
+        from casacore.tables import table
+
+        output = self.tmpdir / "lsrk.ms"
+        result = self._run(self.line_ms, output, "--doppler-frame", "lsrk", "--doppler-chan-grid", "20,1405MHz,1MHz")
+        assert result.exit_code == 0, result.output
+
+        with table(f"{output}/SPECTRAL_WINDOW", ack=False) as spw:
+            assert spw.getcell("NUM_CHAN", 0) == 20
+            assert spw.getcell("MEAS_FREQ_REF", 0) == FRAME_CODES["lsrk"]
+            assert np.isclose(spw.getcell("CHAN_FREQ", 0)[0], 1405e6)
+
+    def test_input_ms_is_left_alone(self):
+        from casacore.tables import table
+
+        self._run(self.line_ms, self.tmpdir / "untouched.ms", "--doppler-frame", "bary")
+
+        with table(str(self.line_ms), ack=False) as main:
+            assert main.getcol("LINE_DATA").shape[1] == 32
+
+    def test_the_intermediate_ms_has_no_data_column(self):
+        """Pins why --input-column has no default: DATA is simply not there."""
+        from casacore.tables import table
+
+        with table(str(self.line_ms), ack=False) as main:
+            assert "LINE_DATA" in main.colnames()
+            assert "DATA" not in main.colnames()
+
+    def test_a_missing_column_is_reported(self):
+        result = self._run_columns(self.line_ms, self.tmpdir / "missing.ms", "NOPE_DATA")
+
+        assert result.exit_code != 0
+        assert "NOPE_DATA" in str(result.exception)
+        # The error must name what is actually available.
+        assert "LINE_DATA" in str(result.exception)
+
+    def _run_columns(self, ms, output, input_column):
+        from click.testing import CliRunner
+
+        from mowjsub.parser.doppler_mowjsub import runit
+
+        return CliRunner().invoke(
+            runit,
+            [str(ms), "--input-column", input_column, "--output-column", "LINE_DATA", "--output-ms", str(output), "--doppler-frame", "bary"],
+            catch_exceptions=True,
+        )
+
+    def test_a_non_topocentric_input_is_refused(self):
+        """Correcting an already-regridded MS would apply the shift twice."""
+        import shutil as _shutil
+
+        from casacore.tables import table
+
+        already = self.tmpdir / "already-bary.ms"
+        _shutil.rmtree(already, ignore_errors=True)
+        _shutil.copytree(self.line_ms, already)
+        with table(f"{already}/SPECTRAL_WINDOW", readonly=False, ack=False, lockoptions="auto") as spw:
+            spw.putcell("MEAS_FREQ_REF", 0, FRAME_CODES["bary"])
+
+        result = self._run(already, self.tmpdir / "twice.ms", "--doppler-frame", "lsrk")
+
+        assert result.exit_code != 0
+        assert "BARY" in str(result.exception)
+        assert "twice" in str(result.exception)
+
+    def test_the_fused_path_refuses_a_non_topocentric_input_too(self):
+        """The guard lives in the shared helper, so vis-mowjsub gets it as well."""
+        import shutil as _shutil
+
+        from casacore.tables import table
+
+        already = self.tmpdir / "already-lsrk.ms"
+        _shutil.rmtree(already, ignore_errors=True)
+        _shutil.copytree(self.ms, already)
+        with table(f"{already}/SPECTRAL_WINDOW", readonly=False, ack=False, lockoptions="auto") as spw:
+            spw.putcell("MEAS_FREQ_REF", 0, FRAME_CODES["lsrk"])
+
+        from click.testing import CliRunner
+
+        from mowjsub.parser.vis_mowjsub import runit
+
+        result = CliRunner().invoke(
+            runit,
+            [
+                str(already),
+                "--fit-model",
+                "polynomial",
+                "--order",
+                "2",
+                "--output-column",
+                "LINE_DATA",
+                "--output-ms",
+                str(self.tmpdir / "nope2.ms"),
+                "--doppler-frame",
+                "bary",
+            ],
+            catch_exceptions=True,
+        )
+
+        assert result.exit_code != 0
+        assert "LSRK" in str(result.exception)
+
+    def test_required_options_are_enforced(self):
+        from click.testing import CliRunner
+
+        from mowjsub.parser.doppler_mowjsub import runit
+
+        for missing, args in (
+            ("doppler-frame", ["--input-column", "LINE_DATA", "--output-column", "L", "--output-ms", "x.ms"]),
+            ("output-ms", ["--input-column", "LINE_DATA", "--output-column", "L", "--doppler-frame", "bary"]),
+            ("input-column", ["--output-column", "L", "--output-ms", "x.ms", "--doppler-frame", "bary"]),
+            ("output-column", ["--input-column", "LINE_DATA", "--output-ms", "x.ms", "--doppler-frame", "bary"]),
+        ):
+            result = CliRunner().invoke(runit, [str(self.line_ms), *args], catch_exceptions=True)
+            assert result.exit_code != 0, missing
+            assert missing in result.output, missing
 
 
 def _make_ms(path, nant=4, ntime=4, nchan=32, ncorr=2, f0=1.4e9, df=1e6):

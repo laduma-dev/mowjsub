@@ -11,3 +11,13 @@ Reference
     :nested: full
 
 
+.. click:: mowjsub.parser.vis_mowjsub:runit
+    :prog: vis-mowjsub
+    :nested: full
+
+
+.. click:: mowjsub.parser.doppler_mowjsub:runit
+    :prog: doppler-mowjsub
+    :nested: full
+
+

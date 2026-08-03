@@ -73,6 +73,14 @@ def runit(**kwargs):
     outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
     input_column = opts.input_column
     output_column = opts.output_column
+
+    # Writing back into the input MS is the one path where the output column can
+    # destroy the data the fit was made from, and it cannot be undone.
+    if output_column == input_column and not opts.output_ms:
+        raise RuntimeError(
+            f"--output-column={output_column} is the column being read, and without --output-ms the residual is written back into {ms}, "
+            f"overwriting it. Pass --output-ms to write a new MS, or choose a different --output-column."
+        )
     zarr_name = opts.load_from_cache
     cont_tol = opts.cont_fit_tol
 

@@ -10,3 +10,9 @@ cabs:
     command: vis-mowjsub
     inputs:
       _include: (mowjsub.stimelating)vis_mowjsub_param.yaml
+
+  doppler-mowjsub:
+    info: Doppler-correct an already continuum-subtracted Measurement Set (MS) onto a channel grid fixed in a chosen spectral frame
+    command: doppler-mowjsub
+    inputs:
+      _include: (mowjsub.stimelating)doppler_mowjsub_param.yaml
