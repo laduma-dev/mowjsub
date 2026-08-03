@@ -5,6 +5,29 @@ project's former name, **contsub**.
 
 ## Unreleased (2.0rc2)
 
+### Fixed
+
+- **An `auto` Doppler channel grid no longer loses a channel to floating point.**
+  `common_channel_grid` derives the output length by dividing the common span by
+  the channel width and flooring. When every timestamp shares one Doppler factor
+  — always true of a cube, and effectively true of a short track — that factor
+  cancels out of the ratio, so the span is a whole number of channels in real
+  arithmetic. Multiplying ~1e9 Hz by the factor first leaves the division a few
+  ULPs either side of the integer, and on the low side `floor` charged a whole
+  channel for the rounding.
+
+  The result was an `auto` grid of `nchan_in - 3` instead of the intended
+  `nchan_in - 2`, for **about half of all factors**, with no way to predict
+  which. The ratio is now snapped to the integer when it is within 1e-6 of one;
+  the observed error is ~4e-13 channels, and a real drift falls whole channels
+  short, not a millionth of one.
+
+  **This changes output channel counts.** A grid that came out one channel short
+  now comes out at its intended width — one channel wider than the same run
+  produced before. No data moves: the grid was guard-trimmed either way, and
+  both edges stay strictly inside the shifted band. `vis-mowjsub` and
+  `im-mowjsub` are affected identically, as is `doppler-mowjsub`.
+
 ### Changed
 
 - **`vis-mowjsub --output-column` no longer defaults to `LINE_DATA`.** It is now

@@ -383,11 +383,11 @@ class TestEndToEnd(unittest.TestCase):
             with fitsio.open(path) as hdul:
                 headers.append(hdul[0].header)
                 assert hdul[0].header["SPECSYS"] == FITS_SPECSYS["bary"]
-                # Guard channels mean the grid is narrower than the input band.
-                # Not a fixed count: 'auto' drops one channel at each end, and
-                # which side of the floor() in common_channel_grid a shifted
-                # grid lands on costs at most one more.
-                assert 28 <= hdul[0].header["NAXIS3"] <= 30
+                # Guard channels mean the grid is narrower than the input band,
+                # by exactly the one channel dropped at each end. This was a
+                # range: a shifted grid could land either side of the floor() in
+                # common_channel_grid and lose one more, unpredictably.
+                assert hdul[0].header["NAXIS3"] == 30
 
         # The pair must remain recombinable, i.e. be on one identical grid.
         for key in ("NAXIS3", "CRVAL3", "CDELT3", "CRPIX3", "SPECSYS"):

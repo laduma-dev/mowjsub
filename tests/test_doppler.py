@@ -138,6 +138,31 @@ class TestChannelGrid(unittest.TestCase):
             assert edges.min() > min(freqs)
             assert edges.max() < max(freqs)
 
+    def test_a_shifted_grid_keeps_its_channel_count(self):
+        """One shared factor cancels out of the span, so it cannot change the count.
+
+        It used to. Multiplying ~1e9 Hz by the factor before dividing left the
+        ratio a few ULPs either side of the integer, and on the low side
+        ``floor`` charged a whole channel for the rounding -- for about half of
+        all factors, unpredictably. A cube always takes a single factor, and a
+        short track effectively does too.
+        """
+        steady, _, _ = common_channel_grid(self.ascending, np.ones(4))
+        assert steady == self.nchan - 2
+
+        rng = np.random.default_rng(0)
+        factors = np.concatenate([[1.0, 1.0000023, 0.9999977], 1 + rng.uniform(-3e-4, 3e-4, 50)])
+
+        for factor in factors:
+            for freqs in (self.ascending, self.descending):
+                nchan, chan0, width = common_channel_grid(freqs, np.full(4, factor))
+
+                assert nchan == steady, f"factor {factor!r} changed the channel count"
+                # And the guard channels still hold, against the shifted band.
+                edges = grid_frequencies(nchan, chan0, width)[[0, -1]]
+                assert edges.min() > min(freqs) * factor
+                assert edges.max() < max(freqs) * factor
+
     def test_auto_grid_shrinks_as_the_band_drifts(self):
         """A wider spread of factors must not widen the common coverage."""
         steady, _, _ = common_channel_grid(self.ascending, np.ones(4))
