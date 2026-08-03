@@ -14,7 +14,7 @@ import numpy as np
 from click.testing import CliRunner
 
 from mowjsub.doppler import FITS_SPECSYS, resample_cube
-from mowjsub.parser.im_mowjsub import runit
+from mowjsub.parser.im_mowjsub import command
 from mowjsub.utils import (
     FitsHeader,
     apply_cube_doppler,
@@ -357,7 +357,7 @@ class TestEndToEnd(unittest.TestCase):
         prefix = str(self.tmpdir / "out")
         return (
             CliRunner().invoke(
-                runit,
+                command,
                 [str(self.cube), "--output-prefix", prefix, "--fit-model", "polynomial", "--order", "2", *extra],
                 catch_exceptions=True,
             ),
@@ -446,7 +446,7 @@ class TestEndToEnd(unittest.TestCase):
         for extra in ([], ["--doppler-frame", "bary"]):
             prefix = str(self.tmpdir / f"sw{len(extra)}")
             result = CliRunner().invoke(
-                runit,
+                command,
                 [str(swapped), "--output-prefix", prefix, "--fit-model", "polynomial", "--order", "2", *extra],
                 catch_exceptions=True,
             )
@@ -483,7 +483,7 @@ class TestEndToEnd(unittest.TestCase):
         for index, path in enumerate((normal, swapped)):
             prefix = str(self.tmpdir / f"cmp{index}")
             result = CliRunner().invoke(
-                runit,
+                command,
                 [str(path), "--output-prefix", prefix, "--fit-model", "polynomial", "--order", "2"],
                 catch_exceptions=True,
             )

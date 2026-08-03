@@ -5,6 +5,29 @@ project's former name, **contsub**.
 
 ## Unreleased (2.0rc2)
 
+### Changed
+
+- **The CLI is built on Stimela 3 (`stimela-ninja`/shinobi) instead of scabha.** Each
+  entry point is now a `@shinobi.pystep` whose typed signature is the single schema
+  authority, so the same function backs both the command line and a Stimela 3 recipe
+  step. The flags, their abbreviations, defaults and choices are unchanged — this is a
+  change of machinery, not of interface.
+
+  - **The YAML parameter schemas are gone** (`mowjsub/parser/*.yaml`), along with
+    `scabha` and `omegaconf` as dependencies. Parameters are pydantic `Field`s;
+    `dtype: File` became `Path`, `choices:` a `Literal`, `abbreviation:` a
+    `json_schema_extra` entry, and `policies.positional` an argument to
+    `parser/_cli.py:make_command`.
+  - **The Stimela 2 cab YAMLs are gone** (`mowjsub/stimelating/`). A pystep is itself a
+    step, so the cabs were a second copy of every parameter with nothing keeping the two
+    in agreement. **A Stimela 2 pipeline that `_include`d
+    `(mowjsub.stimelating)mowjsub_cabs.yaml` will break** and needs to use the steps
+    directly.
+  - **`mowjsub.parser.<x>.runit` is a plain function** taking an options namespace, not a
+    `click.Command`. Each module exposes `runit`, `step` (the `StepRef`) and `command`
+    (the `click.Command`); the console scripts point at `command`.
+  - `--loglevel` is now honoured rather than accepted and ignored.
+
 ### Fixed
 
 - **An `auto` Doppler channel grid no longer loses a channel to floating point.**

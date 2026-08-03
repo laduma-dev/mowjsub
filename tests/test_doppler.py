@@ -333,10 +333,10 @@ class TestEndToEnd(unittest.TestCase):
     def _run(self, output, *extra):
         from click.testing import CliRunner
 
-        from mowjsub.parser.vis_mowjsub import runit
+        from mowjsub.parser.vis_mowjsub import command
 
         result = CliRunner().invoke(
-            runit,
+            command,
             [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-column", "LINE_DATA", "--output-ms", str(output), *extra],
             catch_exceptions=True,
         )
@@ -412,10 +412,10 @@ class TestEndToEnd(unittest.TestCase):
     def test_doppler_without_an_output_ms_is_refused(self):
         from click.testing import CliRunner
 
-        from mowjsub.parser.vis_mowjsub import runit
+        from mowjsub.parser.vis_mowjsub import command
 
         result = CliRunner().invoke(
-            runit,
+            command,
             [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-column", "LINE_DATA", "--doppler-frame", "bary"],
             catch_exceptions=True,
         )
@@ -427,10 +427,10 @@ class TestEndToEnd(unittest.TestCase):
         """Omitting --output-column must be an error, not a silent LINE_DATA."""
         from click.testing import CliRunner
 
-        from mowjsub.parser.vis_mowjsub import runit
+        from mowjsub.parser.vis_mowjsub import command
 
         result = CliRunner().invoke(
-            runit,
+            command,
             [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--output-ms", str(self.tmpdir / "nope.ms")],
             catch_exceptions=True,
         )
@@ -442,10 +442,10 @@ class TestEndToEnd(unittest.TestCase):
         """In place, --output-column == --input-column destroys the input."""
         from click.testing import CliRunner
 
-        from mowjsub.parser.vis_mowjsub import runit
+        from mowjsub.parser.vis_mowjsub import command
 
         result = CliRunner().invoke(
-            runit,
+            command,
             [str(self.ms), "--fit-model", "polynomial", "--order", "2", "--input-column", "DATA", "--output-column", "DATA"],
             catch_exceptions=True,
         )
@@ -483,10 +483,10 @@ class TestStandaloneDoppler(unittest.TestCase):
     def _contsub(cls, output, *extra):
         from click.testing import CliRunner
 
-        from mowjsub.parser.vis_mowjsub import runit
+        from mowjsub.parser.vis_mowjsub import command
 
         return CliRunner().invoke(
-            runit,
+            command,
             [str(cls.ms), "--fit-model", "polynomial", "--order", "2", "--output-column", "LINE_DATA", "--output-ms", str(output), *extra],
             catch_exceptions=True,
         )
@@ -494,10 +494,10 @@ class TestStandaloneDoppler(unittest.TestCase):
     def _run(self, ms, output, *extra):
         from click.testing import CliRunner
 
-        from mowjsub.parser.doppler_mowjsub import runit
+        from mowjsub.parser.doppler_mowjsub import command
 
         return CliRunner().invoke(
-            runit,
+            command,
             [str(ms), "--input-column", "LINE_DATA", "--output-column", "LINE_DATA", "--output-ms", str(output), *extra],
             catch_exceptions=True,
         )
@@ -576,10 +576,10 @@ class TestStandaloneDoppler(unittest.TestCase):
     def _run_columns(self, ms, output, input_column):
         from click.testing import CliRunner
 
-        from mowjsub.parser.doppler_mowjsub import runit
+        from mowjsub.parser.doppler_mowjsub import command
 
         return CliRunner().invoke(
-            runit,
+            command,
             [str(ms), "--input-column", input_column, "--output-column", "LINE_DATA", "--output-ms", str(output), "--doppler-frame", "bary"],
             catch_exceptions=True,
         )
@@ -616,10 +616,10 @@ class TestStandaloneDoppler(unittest.TestCase):
 
         from click.testing import CliRunner
 
-        from mowjsub.parser.vis_mowjsub import runit
+        from mowjsub.parser.vis_mowjsub import command
 
         result = CliRunner().invoke(
-            runit,
+            command,
             [
                 str(already),
                 "--fit-model",
@@ -642,7 +642,7 @@ class TestStandaloneDoppler(unittest.TestCase):
     def test_required_options_are_enforced(self):
         from click.testing import CliRunner
 
-        from mowjsub.parser.doppler_mowjsub import runit
+        from mowjsub.parser.doppler_mowjsub import command
 
         for missing, args in (
             ("doppler-frame", ["--input-column", "LINE_DATA", "--output-column", "L", "--output-ms", "x.ms"]),
@@ -650,7 +650,7 @@ class TestStandaloneDoppler(unittest.TestCase):
             ("input-column", ["--output-column", "L", "--output-ms", "x.ms", "--doppler-frame", "bary"]),
             ("output-column", ["--input-column", "LINE_DATA", "--output-ms", "x.ms", "--doppler-frame", "bary"]),
         ):
-            result = CliRunner().invoke(runit, [str(self.line_ms), *args], catch_exceptions=True)
+            result = CliRunner().invoke(command, [str(self.line_ms), *args], catch_exceptions=True)
             assert result.exit_code != 0, missing
             assert missing in result.output, missing
 

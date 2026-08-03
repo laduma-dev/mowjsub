@@ -1,10 +1,11 @@
-import numpy as np
-from scabha import init_logger
+import logging
 
-from . import BIN
+import numpy as np
+
+from . import LOGGER
 from .exceptions import BadFitError
 
-log = init_logger(BIN.im_plane)
+log = logging.getLogger(LOGGER)
 
 
 class ContSub:
