@@ -71,7 +71,11 @@ The first two apply **one factor per timestamp**. The image-plane path cannot: a
 
 `doppler_regrid_dataset` requires a topocentric input grid (`require_topocentric`, checked against `SPECTRAL_WINDOW::MEAS_FREQ_REF`), so an MS that `mstransform` already regridded is refused rather than corrected twice.
 
-Two traps in the image-plane path: `FitsHeader.retFreq()` returns **MHz** while `parse_channel_grid` returns **Hz**, so cube frequencies are converted before touching `doppler.py`; and `retFreq` goes through astropy's high-level WCS, which needs a usable obstime even to convert pixels to frequencies, so `plan_cube_doppler` resolves the epoch first and stamps it into the header copy it passes on. `FITS_SPECSYS` (FITS keyword names) and `FRAME_CODES` (MS integer codes) describe the same frames for different formats and must not be substituted for one another.
+The cube's channel grid comes from `utils.spectral_frequencies`, which reads the *low-level* WCS: it returns **Hz** whatever `CUNIT` says, takes the channel count from whichever axis the WCS calls spectral, and needs no observation time. That last point matters -- the high-level WCS refuses to convert pixels to frequencies without a usable obstime, which is why this used to resolve the epoch and stamp it into a header copy first. `plan_cube_doppler` now resolves the epoch for the Doppler factor alone.
+
+`FitsHeader.retFreq()` is the same grid in **MHz**, and exists for the fitters: `FitFunc.prepare` converts back with `self.freqs * 1e6`, and `FitPolynomial` runs `numpy.polyfit` against those values, where the scale sets the conditioning. Measuring a frequency wants `spectral_frequencies`; fitting against one wants `retFreq`. Do not swap them.
+
+`FITS_SPECSYS` (FITS keyword names) and `FRAME_CODES` (MS integer codes) describe the same frames for different formats and must not be substituted for one another.
 
 Constants and the composition of conversion steps are taken from casacore's `MeasTable`/`MCFrequency`, so grids agree with CASA. Two details are load-bearing:
 

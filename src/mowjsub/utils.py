@@ -180,40 +180,54 @@ def subtract_fits(data_file: File, model_file: File, hdu_idx: int, ra_chunks: in
     return fitsio.PrimaryHDU(out_ds.hdu.data, header=header)
 
 
+def spectral_frequencies(header):
+    """Channel frequencies of a cube, in Hz.
+
+    The grid is read through the *low-level* WCS, which is what makes this
+    independent of two things the previous implementation was tied to. It
+    returns SI regardless of ``CUNIT``, so there is no unit to guess; and it
+    converts pixels to frequencies without an observation time, where the
+    high-level WCS refuses to do so at all. The spectral axis is whichever one
+    the WCS says it is, rather than ``NAXIS3``.
+
+    Args:
+        header: FITS header of a spectral cube.
+
+    Returns:
+        np.ndarray: Channel frequency in Hz, one per channel.
+
+    Raises:
+        RuntimeError: The header describes no spectral axis.
+    """
+    wcs = WCS(header)
+    axis = wcs.wcs.spec
+    if axis < 0:
+        raise RuntimeError("This cube has no spectral axis.")
+
+    nchan = int(header[f"NAXIS{axis + 1}"])
+
+    return np.asarray(wcs.spectral.array_index_to_world_values(np.arange(nchan)), dtype=float)
+
+
 class FitsHeader:
     def __init__(self, header: Dict):
         self._header = header.copy()
 
     def retFreq(self):
-        """
-        Extract the part of the cube name that will be used in the name of
-        the averaged cube
+        """Channel frequencies in MHz.
 
-        Parameters
-        ----------
-        header : `~astropy.io.fits.Header`
-            header object from the fits file
+        MHz rather than Hz because the fitters work in it: ``FitFunc.prepare``
+        converts back with ``self.freqs * 1e6`` for :func:`chans_in_velwidth`,
+        and ``FitPolynomial`` fits ``numpy.polyfit`` against these values, where
+        the scale decides the conditioning. Anything measuring a frequency
+        rather than fitting against one wants :func:`spectral_frequencies`.
 
         Returns
         -------
         frequency
             a 1D numpy array of channel frequencies in MHz
         """
-
-        if "TIMESYS" not in self._header:
-            self._header["TIMESYS"] = "utc"
-        elif self._header["TIMESYS"] != "utc":
-            self._header["TIMESYS"] = "utc"
-        freqDim = self._header["NAXIS3"]
-        wcs3d = WCS(self._header)
-        try:
-            wcsfreq = wcs3d.spectral
-        except:  # noqa: E722 TODO(Mika) fix this
-            wcsfreq = wcs3d.sub(["spectral"])
-        return np.around(
-            wcsfreq.pixel_to_world(np.arange(0, freqDim)).to(units.MHz).value,
-            decimals=7,
-        )
+        return np.around(spectral_frequencies(self._header) / 1e6, decimals=7)
 
     def getAppendHeader(self, nchan):
         return self.spectralSplitHeader(nchan, orig="append_fits")
@@ -627,10 +641,12 @@ def cube_spectral_axis(header):
     if spec < 0:
         raise RuntimeError("This cube has no spectral axis, so there is nothing to Doppler-correct.")
 
-    # A stricter check than the Doppler code alone needs. FitsHeader.retFreq
-    # reads NAXIS3 directly and im-mowjsub writes its continuum back assuming
-    # RA, DEC, FREQ[, STOKES], so a cube with the spectral axis elsewhere fails
-    # confusingly during the fit, long before reaching this point. Say so.
+    # A stricter check than either the Doppler code or the spectral grid needs:
+    # both derive the axis from the WCS and are order-agnostic. What is not is
+    # the continuum write-back in im_mowjsub.runit, which transposes to a fixed
+    # (2, 1, 0) and puts Stokes outermost. Until that places its axes by WCS
+    # too, a cube with the spectral axis elsewhere would fail confusingly on the
+    # way out rather than here. Say so up front instead.
     if spec != 2:
         raise RuntimeError(f"mowjsub needs the spectral axis on NAXIS3; this cube has it on NAXIS{spec + 1}. Reorder the axes (e.g. with CASA imtrans) and try again.")
 
@@ -750,16 +766,13 @@ def plan_cube_doppler(
     location = _cube_location(header, telescope)
     epoch = _cube_time(header, obs_time)
 
-    # retFreq reads the grid through astropy's high-level WCS, which insists on a
-    # usable observation time even to convert pixels to frequencies. Hand it the
-    # epoch resolved above, so --doppler-time rescues a header that lacks one
-    # instead of failing deep inside astropy.
-    spectral_header = fitsio.Header(header)
-    spectral_header["MJD-OBS"] = epoch / 86400.0
-
-    # retFreq works in MHz; everything in doppler.py that is not scale-free
-    # (parse_channel_grid) works in Hz, so normalise here.
-    freqs_in = np.asarray(FitsHeader(spectral_header).retFreq(), dtype=float) * 1e6
+    # Hz throughout, which is what everything in doppler.py that is not
+    # scale-free (parse_channel_grid) works in. This used to go through retFreq,
+    # which meant converting from MHz and stamping the resolved epoch into a
+    # header copy first -- the high-level WCS it used insists on a usable
+    # observation time even to turn pixels into frequencies. Neither is needed
+    # now; the epoch below is for the Doppler factor alone.
+    freqs_in = spectral_frequencies(header)
 
     if frame == "source" and source_vel is None:
         raise RuntimeError("--doppler-frame=source needs a systemic velocity, and a cube carries none. Pass --doppler-source-vel.")
