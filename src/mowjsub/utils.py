@@ -13,6 +13,7 @@ from astropy.time import Time
 from astropy.wcs import WCS
 from casacore.tables import table
 from daskms import Dataset, xds_from_ms, xds_from_table
+from fitstoolz.reader import FitsData
 from scabha import init_logger
 from scabha.basetypes import File
 from tqdm.dask import TqdmCallback
@@ -95,59 +96,82 @@ def chans_in_velwidth(freqs: np.ndarray, velwidth: float):
     return max(1, int(round(velwidth / dv)))
 
 
+#: mowjsub's dimension name for each kind of axis fitstoolz reports.
+FITSTOOLZ_DIMS = {
+    "celestial.ra": "ra",
+    "celestial.dec": "dec",
+    "spectral": "spectral",
+    "stokes": "stokes",
+}
+MOWJSUB_DIMS = {value: key for key, value in FITSTOOLZ_DIMS.items()}
+
+
 def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):
-    """Creates Zarr store from a FITS file. The resulting array has
-    dimensions = RA, DEC, SPECTRAL[, STOKES]
+    """Open a FITS cube as a Dataset with dims ``ra, dec, spectral[, stokes]``.
+
+    Axes are matched by what the WCS says they are rather than by where they
+    sit. A cube with ``CTYPE3=STOKES`` and ``CTYPE4=FREQ`` therefore reads the
+    same as the usual layout: the previous implementation assigned the names
+    positionally, so on that cube it labelled the *Stokes* axis ``spectral`` and
+    failed with ``conflicting sizes for dimension 'spectral'``.
 
     Args:
-        fname (str|path): FITS file_
-        chunks (dict, optional): xarray chunk object. Defaults to {1: 25, 2:25}.
+        fname (str|path): FITS file.
+        chunks (dict, optional): Chunk size per mowjsub dimension. ``None`` for
+            a dimension means a single chunk.
+        rest_freq (float, optional): Rest frequency in MHz, written into the
+            header copy the outputs inherit.
+        hdu_idx (int): HDU carrying the cube.
+        add_freqs (bool): Include a ``FREQS`` variable, in MHz.
 
     Raises:
-        RuntimeError: Input FITS file doesn't have a spectral axis
-        FileNotFoundError: Input FITS file not found
+        RuntimeError: The file has no spectral axis, or an axis mowjsub cannot
+            place.
+        FileNotFoundError: Input FITS file not found.
 
     Returns:
-        Zarr: Zarr array (persistant store, mode=w)
+        xr.Dataset: ``DATA``, optionally ``FREQS``, and in ``attrs`` the header
+        and ``fits_dims`` -- the dimension order the file itself uses, so a
+        caller can put an array back in it without hardcoding a transpose.
     """
     chunks = chunks or dict(ra=64, dec=None, spectral=None)
-    fds = xds_from_fits(fname, hdus=hdu_idx)[0]
 
-    header = fds.hdu.header
-    if rest_freq:
-        header["RESTFREQ"] = rest_freq * 1e6  # set it to Hz
-    wcs = WCS(header, naxis="spectral stokes".split())
+    with FitsData(fname, hdu=hdu_idx) as fds:
+        header = fds.header
+        if rest_freq:
+            header["RESTFREQ"] = rest_freq * 1e6  # set it to Hz
 
-    axis_names = [header["CTYPE1"], header["CTYPE2"]] + wcs.axis_type_names
-    if not wcs.has_spectral:
-        raise RuntimeError("Input FITS file does not have a spectral axis")
+        try:
+            native = [FITSTOOLZ_DIMS[dim] for dim in fds.dims]
+        except KeyError as error:
+            raise RuntimeError(f"mowjsub cannot place the {error.args[0]!r} axis of {fname}. Expected RA, Dec, spectral and optionally Stokes.") from None
 
-    fds_xyz = fds.hdu.transpose(*axis_names)
+        if "spectral" not in native:
+            raise RuntimeError("Input FITS file does not have a spectral axis")
 
-    new_names = ["ra", "dec", "spectral"]
-    if len(axis_names) == 4:
-        new_names.append("stokes")
+        order = ["ra", "dec", "spectral"] + (["stokes"] if "stokes" in native else [])
 
-    coords = dict([(a, fds.hdu[b].values) for a, b in zip(new_names, axis_names)])
-    if add_freqs:
-        data_vars = {
-            "DATA": (new_names, fds_xyz.data),
-            "FREQS": (("spectral",), FitsHeader(header).retFreq()),
-        }
-    else:
-        data_vars = {
-            "DATA": (new_names, fds_xyz.data),
-        }
-    ds = xr.Dataset(
-        data_vars,
-        coords=coords,
-        attrs=dict(
-            info=f"Temporary copy of data from FITS file: {fname}",
-            header=fitsio.Header(header),
-        ),
-    )
+        # An unset chunk means one chunk, which xarray spells -1. Saying so
+        # explicitly matters: left unset, the axis would inherit fitstoolz's
+        # file-shaped chunking, and a spectral axis split across chunks hands
+        # ContSub.fitContinuum partial spectra to fit.
+        dim_chunks = {MOWJSUB_DIMS[dim]: -1 for dim in order}
+        dim_chunks.update({MOWJSUB_DIMS[dim]: size for dim, size in chunks.items() if dim in MOWJSUB_DIMS and size is not None})
 
-    return ds.chunk(chunks)
+        xds = fds.get_xds(transpose=[MOWJSUB_DIMS[dim] for dim in order], chunks=dim_chunks)
+
+        data_vars = {"DATA": (order, xds.data)}
+        if add_freqs:
+            data_vars["FREQS"] = (("spectral",), FitsHeader(header).retFreq())
+
+        return xr.Dataset(
+            data_vars,
+            attrs=dict(
+                info=f"Temporary copy of data from FITS file: {fname}",
+                header=fitsio.Header(header),
+                fits_dims=tuple(native),
+            ),
+        )
 
 
 def subtract_fits(data_file: File, model_file: File, hdu_idx: int, ra_chunks: int = None):
@@ -633,22 +657,17 @@ CubeDopplerPlan = namedtuple("CubeDopplerPlan", "frame factor freqs_in freqs_out
 def cube_spectral_axis(header):
     """FITS axis number (0-based) of a cube's spectral axis.
 
+    A lookup, not a check. It used to refuse anything but ``NAXIS3``, because
+    the continuum write-back placed its axes by fixed transpose; now that the
+    write-back goes by name, every path here derives the axis from the WCS and
+    is order-agnostic.
+
     Raises:
-        RuntimeError: The cube has no spectral axis, or has one that mowjsub
-            cannot process.
+        RuntimeError: The cube has no spectral axis.
     """
     spec = WCS(header).wcs.spec
     if spec < 0:
         raise RuntimeError("This cube has no spectral axis, so there is nothing to Doppler-correct.")
-
-    # A stricter check than either the Doppler code or the spectral grid needs:
-    # both derive the axis from the WCS and are order-agnostic. What is not is
-    # the continuum write-back in im_mowjsub.runit, which transposes to a fixed
-    # (2, 1, 0) and puts Stokes outermost. Until that places its axes by WCS
-    # too, a cube with the spectral axis elsewhere would fail confusingly on the
-    # way out rather than here. Say so up front instead.
-    if spec != 2:
-        raise RuntimeError(f"mowjsub needs the spectral axis on NAXIS3; this cube has it on NAXIS{spec + 1}. Reorder the axes (e.g. with CASA imtrans) and try again.")
 
     return spec
 

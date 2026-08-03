@@ -7,6 +7,7 @@ import click
 import dask
 import dask.array as da
 import numpy as np
+import xarray as xr
 from omegaconf import OmegaConf
 from scabha import init_logger
 from scabha.basetypes import File
@@ -24,7 +25,6 @@ from mowjsub.fitfuncs import (
 from mowjsub.image_plane import ContSub
 from mowjsub.utils import (
     apply_cube_doppler,
-    cube_spectral_axis,
     get_automask,
     plan_cube_doppler,
     subtract_fits,
@@ -81,11 +81,6 @@ def runit(**kwargs):
     # Zero disables chunking, i.e. the RA axis is read as a single block.
     chunks = dict(ra=ra_chunks or -1, dec=None, spectral=None)
 
-    # Check the axis order up front. zds_from_fits would otherwise reach it
-    # first and fail as a dimension clash between FREQS and DATA, which says
-    # nothing about the actual problem.
-    cube_spectral_axis(fitsio.getheader(infits.PATH, opts.hdu_index))
-
     rest_freq = opts.rest_freq
     zds = zds_from_fits(
         infits.PATH,
@@ -94,9 +89,7 @@ def runit(**kwargs):
         hdu_idx=opts.hdu_index,
         add_freqs=True,
     )
-    base_dims = ["ra", "dec", "spectral", "stokes"]
-    if not hasattr(zds, "stokes"):
-        base_dims.remove("stokes")
+    base_dims = list(zds.DATA.dims)
 
     dims_string = "ra,dec,spectral"
     has_stokes = "stokes" in base_dims
@@ -117,7 +110,9 @@ def runit(**kwargs):
 
     signature = f"({dims_string}),({dims_string}) -> ({dims_string})"
     meta = (np.ndarray((), cube.dtype),)
-    xspec = zds.FREQS.data.compute()
+    # FREQS is a small in-memory grid, not a dask array: it used to be one only
+    # because the whole Dataset got chunked on the way out.
+    xspec = np.asarray(zds.FREQS.data)
 
     dask.config.set(scheduler="threads", num_workers=opts.nworkers)
     dblocks = cube.data.blocks
@@ -172,9 +167,15 @@ def runit(**kwargs):
             )
         )
 
-    continuum = da.concatenate(futures).transpose((2, 1, 0))
+    # Back into the order the file itself uses. This was a fixed
+    # `.transpose((2, 1, 0))` plus a `[np.newaxis]`, which assumed spectral was
+    # third and Stokes outermost; xarray transposes by name, so the same code
+    # now writes a RA, DEC, FREQ, STOKES cube and a RA, DEC, STOKES, FREQ one
+    # into their own layouts.
+    continuum = xr.DataArray(da.concatenate(futures), dims=("ra", "dec", "spectral"))
     if has_stokes:
-        continuum = continuum[np.newaxis, ...]
+        continuum = continuum.expand_dims("stokes")
+    continuum = continuum.transpose(*zds.attrs["fits_dims"]).data
 
     header = zds.attrs["header"]
 
