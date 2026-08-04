@@ -18,24 +18,16 @@ A key advantage of image-plane continuum subtraction is that it allows for robus
     im-mowjsub --output-prefix output_prefix \
                 --sigma-clip 5 \
                 --order 3 \
-                --segments 250 \
+                --vel-width 250 \
                 --ra-chunks 64 \
                 --nworkers 8 \
                 input_fits_cube.fits
+
+The mask is built by fitting an unmasked continuum first and clipping *that* residual, so it works on a cube which still holds its continuum.
 
 However, if the line emission is known, a binary mask can be provided to the ``--mask-image`` option. In this case, the ``--sigma-clip`` parameter will be ignored (if set.)
 
-:command:`im-mowjsub` also allows the user to specify multiple ``--sigma-clip``, ``--order`` and ``--segments`` parameters. This allows the user to do the continuum subtraction in multiple iterations, each time using a different set of parameters. The advantage of this is that the user can start with a large ``--sigma-clip`` and wide ``--segments`` values to remove the most significant line emission, and then gradually decrease both to remove smaller line emission features. When using this mode, the ``--segments`` and ``--order`` must have the same length. Here's an example
-
-.. code-block:: bash
-
-    im-mowjsub --output-prefix output_prefix \
-                --sigma-clip 5 5 3 \
-                --order 3 2 2 \
-                --segments 400 300 250 \
-                --ra-chunks 64 \
-                --nworkers 8 \
-                input_fits_cube.fits
+The width of the fit window can be given either as a velocity, with ``--vel-width``, or directly in channels, with ``--chan-width``. Give one or the other, not both. ``--segments`` is the former name of ``--vel-width`` and is kept only for compatibility.
 
 
 :command:`vis-mowjsub`

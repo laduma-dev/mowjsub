@@ -42,16 +42,23 @@ log = logging.getLogger(LOGGER)
 
 
 def get_automask(cube, fitfunc, sigma_clip):
-    """
-    Generate a binary mask by sigma-thresholding the input cube
+    """Generate a binary mask by sigma-thresholding the input cube.
+
+    An unmasked continuum is fitted first and the *residual* is what gets
+    clipped, so this works on a cube that still holds its continuum -- unlike a
+    mask made by a source finder run over the same cube, which would find the
+    continuum sources in every channel.
 
     Args:
-        xspec (Array): Spectral coordinates
-        cube (Array): Data cdube
-        sigma_clip(float): Sigma clip level
+        cube (Array): Data cube.
+        fitfunc (FitFunc): Fitter used for that first, unmasked continuum.
+        sigma_clip (float): Sigma clip level.
 
     Returns:
-        Array : Binary mask (False is masked, True is not)
+        Array: Binary mask, ``True`` where a channel is excluded from the fit --
+        the convention ``FitFunc.fit`` reads (it fits ``self.freqs[~mask]``).
+        Note this is the opposite of what the sigma clip itself returns, which
+        is why the result is inverted on the way out.
     """
 
     log.info("Creating binary mask as requested")

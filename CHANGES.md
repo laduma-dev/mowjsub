@@ -3,7 +3,45 @@
 Notable changes to mowjsub. Versions before 2.0 were released under the
 project's former name, **contsub**.
 
-## Unreleased (2.0rc2)
+## Unreleased
+
+### Changed
+
+- **`im-mowjsub --sigma-clip` takes a single value, and `--automask-per-iter` is
+  gone.** Both described an iterative automasking mode that was never
+  implemented: `get_automask` does one fit and one clip, and never read the flag
+  at all. The option's `list[float]` type was not merely unused, it was unusable
+  — `PixSigmaClip` multiplies the whole list against the noise array in one
+  operation, so any count but one mis-broadcast, raising for most lengths and
+  producing a silently wrong mask when the list happened to match the spectral
+  axis. **A command line passing more than one `--sigma-clip`, or
+  `--automask-per-iter`, must drop them**; nothing that worked before stops
+  working, since one value is all that ever did. The multi-iteration example in
+  the usage docs goes with them — it also passed several `--order` and
+  `--segments` values, which have been scalars since the Stimela 3 port.
+
+### Fixed
+
+- **`--chan-width` is honoured rather than accepted and ignored.** Both
+  `im-mowjsub` and `vis-mowjsub` declared the option and neither passed it to a
+  fitter, so it satisfied no validation check and changed no result: a run given
+  only `--chan-width` was refused for want of `--vel-width`, and a run given both
+  quietly used the velocity. `FitFunc.default_prepare` has taken either
+  throughout, so this was CLI wiring rather than a missing feature. Two related
+  changes: giving both widths is now an error rather than a silent preference for
+  one of them, and a `--chan-width` below 1 is refused, since `default_prepare`
+  bumps an even width up by one and so turned 0 into a one-channel window.
+
+- **`--fit-model scipy-median-filter` could not run in the image plane at all.**
+  FITS is big-endian by definition and `scipy.ndimage.median_filter` accepts only
+  native byte order, so on every little-endian machine the fitter reached scipy
+  with a `>f4` spectrum and got back a bare `RuntimeError: Unsupported array
+  type`, naming neither the array nor the reason. The exception escapes
+  `ContSub.fitContinuum`, so it took the whole run with it. The spectrum is
+  converted at that one call site now. The visibility plane was never affected:
+  dask-ms yields native arrays.
+
+## 2.0.0 — 2026-08-04
 
 ### Changed
 

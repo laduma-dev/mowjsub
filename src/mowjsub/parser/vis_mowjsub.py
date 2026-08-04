@@ -16,6 +16,8 @@ from tqdm.dask import TqdmCallback
 
 from mowjsub import BIN, set_logger
 from mowjsub.fitfuncs import (
+    ORDER_MODELS,
+    WIDTH_MODELS,
     FitBSpline,
     FitGCVSpline,
     FitMedFilter,
@@ -50,15 +52,22 @@ def runit(opts):
     fieldid = opts.field_id
     chunksize = opts.row_chunks
     velwidth = opts.vel_width or opts.segments
+    chanwidth = opts.chan_width
     method = opts.fit_model
     order = opts.order
     nworkers = opts.nworkers
 
-    if method in ("spline", "b-spline", "polynomial") and order is None:
+    if method in ORDER_MODELS and order is None:
         raise RuntimeError(f"The parameter 'order' is required for fit-model={method}.")
 
-    if method in ("spline", "b-spline", "median-filter", "scipy-median-filter") and velwidth is None:
-        raise RuntimeError(f"The parameter 'vel-width' is required for fit-model={method}.")
+    if velwidth is not None and chanwidth is not None:
+        raise RuntimeError("--vel-width and --chan-width both set the width of the fit window, in different units. Give one, not both.")
+
+    if chanwidth is not None and chanwidth < 1:
+        raise RuntimeError(f"--chan-width={chanwidth} is not a channel count. It must be at least 1.")
+
+    if method in WIDTH_MODELS and velwidth is None and chanwidth is None:
+        raise RuntimeError(f"The parameter 'vel-width' (or legacy 'segments') or 'chan-width' is required for fit-model={method}.")
 
     doppler_frame = opts.doppler_frame
     # Fail before the fit rather than after it: regridding changes the channel
@@ -95,13 +104,13 @@ def runit(opts):
     futures = []
 
     if method in ("spline", "b-spline"):
-        fitfunc = FitBSpline(xspec, order=order, velwidth=velwidth, fit_tol=cont_tol)
+        fitfunc = FitBSpline(xspec, order=order, velwidth=velwidth, chanwidth=chanwidth, fit_tol=cont_tol)
     elif method == "polynomial":
         fitfunc = FitPolynomial(xspec, order=order, fit_tol=cont_tol)
     elif method == "median-filter":
-        fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=cont_tol)
+        fitfunc = FitMedFilter(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=cont_tol)
     elif method == "scipy-median-filter":
-        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, fit_tol=cont_tol)
+        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=cont_tol)
     elif method == "gcv-spline":
         fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=cont_tol)
     else:
@@ -158,7 +167,11 @@ def runit(opts):
         # bandpass structure it models is stationary; only the residual is moved
         # onto the Doppler-corrected grid.
         source_vel = opts.doppler_source_vel
-        regrid_ds, freqs_out, chanwidth = doppler_regrid_dataset(
+        # `grid_chanwidth`, not `chanwidth`: this is the output grid's channel
+        # width in Hz, a different quantity from the fit-window width in
+        # channels above, which is still needed nowhere below but would be
+        # silently clobbered by the shorter name.
+        regrid_ds, freqs_out, grid_chanwidth = doppler_regrid_dataset(
             msds,
             ms,
             line_data,
@@ -176,7 +189,7 @@ def runit(opts):
         with TqdmCallback(desc="Writing Doppler-corrected line data"):
             da.compute(writes)
 
-        finalise_regridded_ms(ms, ms_name, spwid, freqs_out, chanwidth, doppler_frame)
+        finalise_regridded_ms(ms, ms_name, spwid, freqs_out, grid_chanwidth, doppler_frame)
         log.info(f"UV plane continuum subtraction completed. Doppler-corrected line data written to column '{output_column}' in {ms_name}.")
     elif opts.output_ms:
         # A new MS needs every row column plus the subtables, not just the line
@@ -244,8 +257,14 @@ def vis_mowjsub(
         ),
     ),
     order: int | None = Field(None, description="Order of spline/polynomial or number of top coefficients to use for DCT reconstruction"),
-    vel_width: float | None = Field(None, description="Width of spline segments or median filter window in km/s."),
-    chan_width: int | None = Field(None, description="Width of spline segments or median filter window in number of channels."),
+    vel_width: float | None = Field(None, description="Width of spline segments or median filter window in km/s. Give this or --chan-width, not both."),
+    chan_width: int | None = Field(
+        None,
+        description=(
+            "Width of spline segments or median filter window in number of channels. The alternative to --vel-width, for a caller that "
+            "wants the window fixed in channels rather than converted from a velocity against the band centre. Give one or the other, not both."
+        ),
+    ),
     gcv_lambda: float | None = Field(
         None,
         description=(

@@ -17,6 +17,7 @@ import astropy.io.fits as fitsio
 import numpy as np
 from click.testing import CliRunner
 
+from mowjsub import utils
 from mowjsub.parser._cli import make_command
 from mowjsub.parser.doppler_mowjsub import command as doppler_command
 from mowjsub.parser.doppler_mowjsub import doppler_mowjsub
@@ -30,6 +31,34 @@ COMMANDS = {
     "vis-mowjsub": (vis_command, ["--output-column", "LINE", "--fit-model", "polynomial", "--order", "3"]),
     "doppler-mowjsub": (doppler_command, ["--input-column", "A", "--output-column", "B", "--doppler-frame", "bary"]),
 }
+
+
+#: A small cube with a real spectral WCS, and enough structure that a continuum
+#: fit has something to do -- a flat cube would model identically at any window
+#: width, so the width tests below would pass however the option were wired.
+_CUBE_NCHAN = 64
+_CUBE_F0 = 1.36e9
+_CUBE_DF = 6.5e3
+#: Channel frequencies in Hz, as `utils.chans_in_velwidth` wants them.
+_CUBE_FREQS = _CUBE_F0 + _CUBE_DF * np.arange(_CUBE_NCHAN)
+
+
+def _write_cube(path, npix=3):
+    """Write that cube: noise on a sloping continuum, with a one-channel line."""
+    header = fitsio.Header()
+    header["CTYPE1"], header["CRVAL1"], header["CDELT1"], header["CRPIX1"], header["CUNIT1"] = "RA---SIN", 201.36506, -1.0 / 3600, npix / 2, "deg"
+    header["CTYPE2"], header["CRVAL2"], header["CDELT2"], header["CRPIX2"], header["CUNIT2"] = "DEC--SIN", -43.01911, 1.0 / 3600, npix / 2, "deg"
+    header["CTYPE3"], header["CRVAL3"], header["CDELT3"], header["CRPIX3"], header["CUNIT3"] = "FREQ", _CUBE_F0, _CUBE_DF, 1.0, "Hz"
+    header["RESTFRQ"] = 1.42040575e9
+    header["SPECSYS"] = "TOPOCENT"
+    header["BUNIT"] = "Jy/beam"
+
+    rng = np.random.default_rng(20260804)
+    data = rng.normal(scale=0.1, size=(_CUBE_NCHAN, npix, npix)).astype(np.float32)
+    data += np.linspace(1.0, 2.0, _CUBE_NCHAN, dtype=np.float32)[:, None, None]
+    data[_CUBE_NCHAN // 2] += 10.0
+
+    fitsio.PrimaryHDU(data, header=header).writeto(path, overwrite=True)
 
 
 class TestMissingInputs(unittest.TestCase):
@@ -142,3 +171,157 @@ class TestMakeCommand(unittest.TestCase):
             result = CliRunner().invoke(command, ["--version"])
             assert result.exit_code == 0, name
             assert result.output.strip(), name
+
+
+class TestChanWidthIsHonoured(unittest.TestCase):
+    """``--chan-width`` reaches the fitter.
+
+    Both entry points accepted the option and neither passed it on. It
+    therefore satisfied no validation check and reached no ``FitFunc``: a run
+    given only ``--chan-width`` was refused for want of ``--vel-width``, and a
+    run given both quietly used the velocity. ``FitFunc.default_prepare`` has
+    taken either throughout -- ``test_main.TestFitsFunc`` pins that the two
+    agree -- so what was missing is CLI wiring, which is why this lives here
+    and not beside those.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.cube = self.tmpdir / "cube.fits"
+        _write_cube(self.cube)
+        # An empty directory is enough for vis-mowjsub: the width checks run
+        # before the MS is opened, the same trick TestOutputMsIsNotTheInput uses.
+        self.ms = self.tmpdir / "input.ms"
+        self.ms.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _im(self, *args):
+        return CliRunner().invoke(im_command, [str(self.cube), *args], catch_exceptions=True)
+
+    def _vis(self, *args):
+        return CliRunner().invoke(vis_command, [str(self.ms), "--output-column", "LINE", *args], catch_exceptions=True)
+
+    def test_chan_width_alone_satisfies_the_width_requirement(self):
+        for name, result in (
+            ("im-mowjsub", self._im("--fit-model", "scipy-median-filter", "--chan-width", "5", "--output-prefix", str(self.tmpdir / "out"))),
+            ("vis-mowjsub", self._vis("--fit-model", "scipy-median-filter", "--chan-width", "5")),
+        ):
+            assert "is required for fit-model" not in str(result.exception), name
+
+    def test_neither_width_is_still_refused(self):
+        for name, result in (
+            ("im-mowjsub", self._im("--fit-model", "scipy-median-filter")),
+            ("vis-mowjsub", self._vis("--fit-model", "scipy-median-filter")),
+        ):
+            assert "is required for fit-model" in str(result.exception), name
+
+    def test_both_widths_together_are_refused(self):
+        """They set the same window in different units, and `default_prepare`
+        silently prefers the velocity -- so accepting both would mean ignoring
+        one of two values the caller stated explicitly."""
+        for name, result in (
+            ("im-mowjsub", self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", "--chan-width", "5")),
+            ("vis-mowjsub", self._vis("--fit-model", "scipy-median-filter", "--vel-width", "15", "--chan-width", "5")),
+        ):
+            assert "Give one, not both" in str(result.exception), name
+
+    def test_a_chan_width_below_one_is_refused(self):
+        """`default_prepare` bumps an even width up by one, which turns 0 into a
+        one-channel window and leaves a negative width negative."""
+        for name, result in (
+            ("im-mowjsub", self._im("--fit-model", "scipy-median-filter", "--chan-width", "0")),
+            ("vis-mowjsub", self._vis("--fit-model", "scipy-median-filter", "--chan-width", "0")),
+        ):
+            assert "is not a channel count" in str(result.exception), name
+
+    def test_chan_width_gives_the_same_continuum_as_the_equivalent_vel_width(self):
+        """The end-to-end check that the value is used, not merely accepted.
+
+        `scipy-median-filter` rather than a spline: `FitBSpline` jitters its
+        knots and exposes no seed on the command line, so a CLI-level equality
+        check on it would be flaky for reasons that have nothing to do with the
+        width.
+        """
+        chanwidth = utils.chans_in_velwidth(_CUBE_FREQS, 15 * 1e3)
+
+        by_vel = self.tmpdir / "by-vel"
+        by_chan = self.tmpdir / "by-chan"
+
+        for prefix, width in ((by_vel, ("--vel-width", "15")), (by_chan, ("--chan-width", str(chanwidth)))):
+            result = self._im("--fit-model", "scipy-median-filter", *width, "--output-prefix", str(prefix))
+            assert result.exit_code == 0, (prefix, result.exception)
+
+        with fitsio.open(f"{by_vel}-cont.fits") as vel, fitsio.open(f"{by_chan}-cont.fits") as chan:
+            np.testing.assert_array_equal(chan[0].data, vel[0].data)
+
+    def test_an_unconverted_chan_width_would_have_failed_that_check(self):
+        """Guards the test above: a different width must give a different fit,
+        or the equality it asserts would hold however the option were wired.
+        """
+        other = self.tmpdir / "other"
+        result = self._im("--fit-model", "scipy-median-filter", "--chan-width", "3", "--output-prefix", str(other))
+        assert result.exit_code == 0, result.exception
+
+        reference = self.tmpdir / "reference"
+        result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", "--output-prefix", str(reference))
+        assert result.exit_code == 0, result.exception
+
+        with fitsio.open(f"{other}-cont.fits") as a, fitsio.open(f"{reference}-cont.fits") as b:
+            assert not np.array_equal(a[0].data, b[0].data)
+
+
+class TestSigmaClipIsScalar(unittest.TestCase):
+    """``--sigma-clip`` takes one value, and the automask reaches the fit.
+
+    It used to be a ``list[float]`` ("one per iteration"), with a companion
+    ``--automask-per-iter``, but no iteration was ever implemented:
+    ``get_automask`` does one fit and one clip, and never read the flag.
+    ``PixSigmaClip`` multiplies the whole list against the noise array in a
+    single operation, so anything but one value mis-broadcast -- usually a
+    crash, and a silently wrong mask when the list happened to be as long as
+    the spectral axis.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.cube = self.tmpdir / "cube.fits"
+        _write_cube(self.cube)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _im(self, *args):
+        return CliRunner().invoke(im_command, [str(self.cube), *args], catch_exceptions=True)
+
+    def test_a_single_value_is_accepted(self):
+        result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", "--sigma-clip", "3", "--output-prefix", str(self.tmpdir / "out"))
+
+        assert result.exit_code == 0, result.exception
+
+    def test_a_second_value_is_a_usage_error(self):
+        """Not a traceback from inside numpy's broadcasting, which is what a
+        list-typed option gave for every count the clipper could not use."""
+        result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", "--sigma-clip", "5", "3", "--output-prefix", str(self.tmpdir / "out"))
+
+        assert result.exit_code == 2, result.output
+
+    def test_automask_per_iter_is_gone(self):
+        assert "--automask-per-iter" not in CliRunner().invoke(im_command, ["--help"]).output
+
+    def test_the_automask_changes_the_fit(self):
+        """Guards the acceptance test above: an option that parsed but did not
+        reach `get_automask` would still exit 0.
+
+        The cube carries a one-channel line, so clipping it out of the fit has
+        to move the continuum model.
+        """
+        masked, unmasked = self.tmpdir / "masked", self.tmpdir / "unmasked"
+
+        for prefix, extra in ((masked, ("--sigma-clip", "3")), (unmasked, ())):
+            result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", *extra, "--output-prefix", str(prefix))
+            assert result.exit_code == 0, (prefix, result.exception)
+
+        with fitsio.open(f"{masked}-cont.fits") as a, fitsio.open(f"{unmasked}-cont.fits") as b:
+            assert not np.array_equal(a[0].data, b[0].data)

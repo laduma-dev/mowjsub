@@ -13,6 +13,20 @@ from .exceptions import BadFitError
 
 log = logging.getLogger(LOGGER)
 
+#: Fit models that cannot run without an ``order``.
+ORDER_MODELS = ("b-spline", "spline", "polynomial")
+
+#: Fit models that cannot run without a fit-window width -- either
+#: ``velwidth`` (physical) or ``chanwidth`` (in channels). ``default_prepare``
+#: derives the second from the first when both are offered, so a caller need
+#: only supply one, but it raises when handed neither.
+#:
+#: Both lists live here rather than in the parsers because the two entry points
+#: enforce the same requirement and had already drifted once: ``--chan-width``
+#: was accepted by both and passed on by neither, so it satisfied no check and
+#: reached no fitter.
+WIDTH_MODELS = ("b-spline", "spline", "median-filter", "scipy-median-filter")
+
 
 class FitFunc:
     def __init__(
@@ -323,6 +337,19 @@ class FitMedFilterFast(FitFunc):
             data_filled[nan_mask] = np.interp(np.flatnonzero(nan_mask), np.flatnonzero(~nan_mask), data[~nan_mask])
         else:
             data_filled = data
+
+        # scipy's rank filters accept only native byte order, and raise a bare
+        # `RuntimeError: Unsupported array type` on anything else -- naming
+        # neither the array nor the reason. FITS is big-endian by definition, so
+        # `zds_from_fits` hands back a `>f4` cube on every little-endian machine
+        # there is, and this fitter could not run in the image plane at all.
+        # Converted here, per spectrum, rather than over the cube at read time:
+        # this is the only consumer that cannot take the array as the file
+        # stores it, and byteswapping whole cubes for it would cost every other
+        # fitter a copy. `asarray` is a no-op when the order is already native,
+        # so the visibility plane (where dask-ms yields native arrays) is
+        # untouched.
+        data_filled = np.asarray(data_filled, dtype=data_filled.dtype.newbyteorder("="))
 
         # Use scipy.ndimage.median_filter for speed
         filtered = median_filter(data_filled, size=self.chanwidth, mode="reflect")
