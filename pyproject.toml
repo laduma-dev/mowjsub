@@ -1,6 +1,6 @@
 [project]
 name = "mowjsub"
-version = "2.0.0"
+version = "2.0.1"
 description = "Radio astronomy data continuum subtraction tools"
 authors = [
 	{ name = "Sphesihle Makhathini" },

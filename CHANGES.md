@@ -3,7 +3,7 @@
 Notable changes to mowjsub. Versions before 2.0 were released under the
 project's former name, **contsub**.
 
-## Unreleased
+## 2.0.1 — 2026-08-04
 
 ### Changed
 
