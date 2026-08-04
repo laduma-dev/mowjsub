@@ -387,6 +387,64 @@ class TestZdsFromFits(unittest.TestCase):
 
         assert "spectral axis" in str(raised.exception)
 
+    def _unnamed_fourth_axis(self, path, ctype=None, length=1):
+        """The cube from github issue #31: a fourth axis the WCS cannot type.
+
+        Written by hand rather than through ``_write``, since the point is a
+        header astropy will parse but not classify.
+        """
+        header = self._header()
+        header["NAXIS4"] = length
+        if ctype is None:
+            del header["CTYPE4"]
+        else:
+            header["CTYPE4"] = ctype
+        data = np.zeros((length, 8, 6, 6), np.float32)
+        fitsio.PrimaryHDU(data, header=header).writeto(path, overwrite=True)
+
+    def test_an_unplaceable_axis_names_the_commands_that_repair_it(self):
+        """The repair is fitstoolz's, so the message has to hand it over whole.
+
+        Both routes work today -- what nobody would guess is that the axis is
+        addressed as the empty ctype, which is what astropy calls an unset
+        CTYPE. Naming the FITS axis number matters for the same reason: the
+        error used to report fitstoolz's dimension name ('axis0'), which
+        appears in neither the file nor the repair command.
+        """
+        path = self.tmpdir / "unnamed.fits"
+        self._unnamed_fourth_axis(path)
+
+        with self.assertRaises(RuntimeError) as raised:
+            utils.zds_from_fits(path)
+
+        message = str(raised.exception)
+        assert "axis 4" in message and "CTYPE4 is unset" in message
+        assert f"fitstoolz remove-axis {path} --ctype '' --outfile" in message
+        assert f"fitstoolz header {path} --add CTYPE4=STOKES --outfile" in message
+        # Degenerate, so removing it discards nothing and needs no index.
+        assert "--select-index" not in message
+
+    def test_a_named_but_unknown_axis_is_addressed_by_its_own_ctype(self):
+        path = self.tmpdir / "linear.fits"
+        self._unnamed_fourth_axis(path, ctype="LINEAR")
+
+        with self.assertRaises(RuntimeError) as raised:
+            utils.zds_from_fits(path)
+
+        assert "CTYPE4 is 'LINEAR'" in str(raised.exception)
+        assert "--ctype LINEAR" in str(raised.exception)
+
+    def test_removing_a_longer_axis_says_which_plane_survives(self):
+        """`remove-axis` keeps index 0 by default; that is data loss, unstated."""
+        path = self.tmpdir / "long.fits"
+        self._unnamed_fourth_axis(path, length=5)
+
+        with self.assertRaises(RuntimeError) as raised:
+            utils.zds_from_fits(path)
+
+        assert "--select-index 0" in str(raised.exception)
+        assert "1 of 5 planes" in str(raised.exception)
+
     def test_rest_freq_reaches_the_header_the_outputs_inherit(self):
         path = self.tmpdir / "rf.fits"
         self._write(path)

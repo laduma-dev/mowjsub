@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+import shlex
 import warnings
 from collections import namedtuple
 from pathlib import Path
@@ -106,6 +107,45 @@ FITSTOOLZ_DIMS = {
 MOWJSUB_DIMS = {value: key for key, value in FITSTOOLZ_DIMS.items()}
 
 
+def unplaceable_axis_error(fds, dim, fname):
+    """The message for an axis mowjsub cannot place, with the way out.
+
+    The cube in github issue #31 was one of these: ``NAXIS=4`` with no
+    ``CTYPE4``, so the WCS says nothing about the fourth axis and neither
+    fitstoolz nor mowjsub can name it. Nothing here is malformed in a way
+    mowjsub should paper over -- but the two commands that repair it exist
+    already, in fitstoolz, and the reader knows enough to write them out in
+    full. It reports the *FITS* axis number and CTYPE rather than fitstoolz's
+    dimension name, because those are what the file and the repair commands
+    speak.
+
+    Args:
+        fds (FitsData): The open cube.
+        dim (str): fitstoolz dimension name mowjsub has no mapping for.
+        fname (str|path): The file, as the caller named it.
+
+    Returns:
+        RuntimeError: To raise.
+    """
+    index = fds.dims.index(dim)
+    ctype = fds.coord_names[index]
+    axis = fds.ndim - index  # FITS numbers axes from the fastest-varying one.
+    length = fds.dshape[index]
+
+    described = f"CTYPE{axis} is {ctype!r}" if ctype else f"CTYPE{axis} is unset"
+    # Longer than a pixel, so removing it throws data away: say which plane
+    # survives rather than let remove-axis default it silently.
+    keep = "" if length == 1 else f" --select-index 0  # keeps 1 of {length} planes"
+    path = shlex.quote(str(fname))
+
+    return RuntimeError(
+        f"mowjsub cannot place axis {axis} of {path}: {described}, so the WCS does not say what it is. "
+        f"Expected RA, Dec, spectral and optionally Stokes.\n"
+        f"  Drop the axis:      fitstoolz remove-axis {path} --ctype {shlex.quote(ctype)} --outfile fixed.fits{keep}\n"
+        f"  Or name it instead: fitstoolz header {path} --add CTYPE{axis}=STOKES --outfile fixed.fits"
+    )
+
+
 def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False):
     """Open a FITS cube as a Dataset with dims ``ra, dec, spectral[, stokes]``.
 
@@ -144,7 +184,7 @@ def zds_from_fits(fname, chunks=None, rest_freq=None, hdu_idx=0, add_freqs=False
         try:
             native = [FITSTOOLZ_DIMS[dim] for dim in fds.dims]
         except KeyError as error:
-            raise RuntimeError(f"mowjsub cannot place the {error.args[0]!r} axis of {fname}. Expected RA, Dec, spectral and optionally Stokes.") from None
+            raise unplaceable_axis_error(fds, error.args[0], fname) from None
 
         if "spectral" not in native:
             raise RuntimeError("Input FITS file does not have a spectral axis")
