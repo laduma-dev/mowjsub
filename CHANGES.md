@@ -3,7 +3,30 @@
 Notable changes to mowjsub. Versions before 2.0 were released under the
 project's former name, **contsub**.
 
-## Unreleased (2.0rc2)
+## Unreleased
+
+### Fixed
+
+- **`--chan-width` is honoured rather than accepted and ignored.** Both
+  `im-mowjsub` and `vis-mowjsub` declared the option and neither passed it to a
+  fitter, so it satisfied no validation check and changed no result: a run given
+  only `--chan-width` was refused for want of `--vel-width`, and a run given both
+  quietly used the velocity. `FitFunc.default_prepare` has taken either
+  throughout, so this was CLI wiring rather than a missing feature. Two related
+  changes: giving both widths is now an error rather than a silent preference for
+  one of them, and a `--chan-width` below 1 is refused, since `default_prepare`
+  bumps an even width up by one and so turned 0 into a one-channel window.
+
+- **`--fit-model scipy-median-filter` could not run in the image plane at all.**
+  FITS is big-endian by definition and `scipy.ndimage.median_filter` accepts only
+  native byte order, so on every little-endian machine the fitter reached scipy
+  with a `>f4` spectrum and got back a bare `RuntimeError: Unsupported array
+  type`, naming neither the array nor the reason. The exception escapes
+  `ContSub.fitContinuum`, so it took the whole run with it. The spectrum is
+  converted at that one call site now. The visibility plane was never affected:
+  dask-ms yields native arrays.
+
+## 2.0.0 — 2026-08-04
 
 ### Changed
 

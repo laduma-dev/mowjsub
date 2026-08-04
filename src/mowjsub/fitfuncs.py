@@ -13,6 +13,20 @@ from .exceptions import BadFitError
 
 log = logging.getLogger(LOGGER)
 
+#: Fit models that cannot run without an ``order``.
+ORDER_MODELS = ("b-spline", "spline", "polynomial")
+
+#: Fit models that cannot run without a fit-window width -- either
+#: ``velwidth`` (physical) or ``chanwidth`` (in channels). ``default_prepare``
+#: derives the second from the first when both are offered, so a caller need
+#: only supply one, but it raises when handed neither.
+#:
+#: Both lists live here rather than in the parsers because the two entry points
+#: enforce the same requirement and had already drifted once: ``--chan-width``
+#: was accepted by both and passed on by neither, so it satisfied no check and
+#: reached no fitter.
+WIDTH_MODELS = ("b-spline", "spline", "median-filter", "scipy-median-filter")
+
 
 class FitFunc:
     def __init__(

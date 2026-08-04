@@ -14,6 +14,8 @@ from pydantic import Field
 
 from mowjsub import BIN, set_logger
 from mowjsub.fitfuncs import (
+    ORDER_MODELS,
+    WIDTH_MODELS,
     FitBSpline,
     FitGCVSpline,
     FitMedFilter,
@@ -60,13 +62,20 @@ def runit(opts):
     if opts.overwrite is False and (outcont.exists() or outline.exists()):
         raise RuntimeError("At least one output file exists, but --no-overwrite has been set. Unset it to proceed.")
 
-    if opts.fit_model in ("b-spline", "spline", "polynomial") and opts.order is None:
+    if opts.fit_model in ORDER_MODELS and opts.order is None:
         raise RuntimeError(f"The parameter 'order' is required for fit-model={opts.fit_model}.")
 
     velwidth = opts.vel_width or opts.segments
+    chanwidth = opts.chan_width
 
-    if opts.fit_model in ("b-spline", "spline", "median-filter", "scipy-median-filter") and velwidth is None:
-        raise RuntimeError(f"The parameter 'vel-width' (or legacy 'segments') is required for fit-model={opts.fit_model}.")
+    if velwidth is not None and chanwidth is not None:
+        raise RuntimeError("--vel-width and --chan-width both set the width of the fit window, in different units. Give one, not both.")
+
+    if chanwidth is not None and chanwidth < 1:
+        raise RuntimeError(f"--chan-width={chanwidth} is not a channel count. It must be at least 1.")
+
+    if opts.fit_model in WIDTH_MODELS and velwidth is None and chanwidth is None:
+        raise RuntimeError(f"The parameter 'vel-width' (or legacy 'segments') or 'chan-width' is required for fit-model={opts.fit_model}.")
 
     if opts.ra_chunks < 0:
         raise RuntimeError("The parameter 'ra-chunks' cannot be negative. Set it to zero to disable chunking.")
@@ -113,13 +122,13 @@ def runit(opts):
     futures = []
 
     if opts.fit_model in ["spline", "b-spline"]:
-        fitfunc = FitBSpline(xspec, order=opts.order, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
+        fitfunc = FitBSpline(xspec, order=opts.order, velwidth=velwidth, chanwidth=chanwidth, fit_tol=opts.cont_fit_tol)
     elif opts.fit_model == "polynomial":
         fitfunc = FitPolynomial(xspec, order=opts.order, fit_tol=opts.cont_fit_tol)
     elif opts.fit_model == "median-filter":
-        fitfunc = FitMedFilter(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
+        fitfunc = FitMedFilter(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=opts.cont_fit_tol)
     elif opts.fit_model == "scipy-median-filter":
-        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, fit_tol=opts.cont_fit_tol)
+        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=opts.cont_fit_tol)
     elif opts.fit_model == "gcv-spline":
         fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=opts.cont_fit_tol)
     else:
@@ -228,8 +237,14 @@ def im_mowjsub(
         ),
     ),
     order: int | None = Field(None, description="Order of spline/polynomial or number of top coefficients to use for DCT reconstruction"),
-    vel_width: float | None = Field(None, description="Width of spline segments or median filter window in km/s."),
-    chan_width: int | None = Field(None, description="Width of spline segments or median filter window in number of channels."),
+    vel_width: float | None = Field(None, description="Width of spline segments or median filter window in km/s. Give this or --chan-width, not both."),
+    chan_width: int | None = Field(
+        None,
+        description=(
+            "Width of spline segments or median filter window in number of channels. The alternative to --vel-width, for a caller that "
+            "wants the window fixed in channels rather than converted from a velocity against the band centre. Give one or the other, not both."
+        ),
+    ),
     gcv_lambda: float | None = Field(
         None,
         description=(
