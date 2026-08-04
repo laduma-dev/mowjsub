@@ -28,7 +28,95 @@ project's former name, **contsub**.
     (the `click.Command`); the console scripts point at `command`.
   - `--loglevel` is now honoured rather than accepted and ignored.
 
+- **`vis-mowjsub --output-column` no longer defaults to `LINE_DATA`.** It is now
+  required. `LINE_DATA` is not an MS-standard column name, and defaulting to it
+  pushed a non-standard name into every tool downstream of the result. There is
+  no standard name for continuum-subtracted visibilities, so mowjsub no longer
+  invents one; pass `--output-column DATA` for the common case of feeding an
+  imager directly. This is a breaking CLI change, taken during the 2.0 release
+  candidates rather than after.
+
+  Dropping the default exposed a hazard it had been hiding: without
+  `--output-ms` the residual is written back into the input MS, so
+  `--output-column DATA` there would overwrite the visibilities the fit was made
+  from. That combination is now refused.
+
+- **Data already on a non-topocentric grid is refused rather than corrected
+  twice.** The Doppler factors are derived by converting *from* topocentric
+  frequency, so anything that has already been shifted would have the frame
+  conversion applied on top of one CASA `mstransform` had applied. Both planes
+  check: `doppler_regrid_dataset` reads `SPECTRAL_WINDOW::MEAS_FREQ_REF`, and
+  `plan_cube_doppler` reads the cube's `SPECSYS`. The cube case is the easier one
+  to reach — imaging an `mstransform` output produces such a cube, and so does a
+  previous `im-mowjsub --doppler-frame` run, since the corrected cubes carry the
+  new frame in their headers. An MS or cube that records no frame at all is taken
+  on trust.
+
 ### Fixed
+
+- **A cube whose spectral axis is a velocity or a wavelength is no longer read as
+  though the numbers were Hz.** `spectral_frequencies` takes the channel grid
+  from the low-level WCS, which returns each axis in *its own* SI unit. A `FREQ`
+  axis in MHz does arrive as Hz — but a `VOPT` or `VRAD` axis arrives as m/s and
+  a `WAVE` axis as metres, and nothing in the return value says which.
+
+  Those values were being used as frequencies. The failure was silent, not loud:
+  on an ordinary 10 km/s optical-velocity cube, `chans_in_velwidth` derived a
+  channel 2600 km/s wide rather than 10 km/s, so it sized the b-spline and
+  median-filter window at **one channel** and the continuum model was worthless
+  with no error raised. `im-mowjsub --doppler-frame` built its grid from the same
+  numbers.
+
+  The axis is now converted explicitly, through the Doppler convention its
+  `CTYPE` names (`VOPT`/`FELO` optical, `VRAD` radio, `VELO` relativistic) and
+  the header's `RESTFRQ` or `RESTWAV`. A velocity axis with no rest frequency is
+  refused with a message pointing at `--rest-freq`, as is a dimensionless axis
+  (`ZOPT`, `BETA`). Frequency cubes — everything CASA and WSClean produce by
+  default — are unaffected.
+
+- **`--fit-model b-spline` no longer dies when `--vel-width` works out near a
+  single channel.** FITPACK puts two limits on a spline's interior knots: they
+  must lie strictly inside the data range, and there can be at most `m - k - 1`
+  of them for `m` points of order `k`. mowjsub enforced neither — the knot
+  positions were clipped to `size - 1`, which is the last data point rather than
+  the one before it, and the knot count came straight from `--vel-width` with no
+  reference to the spectrum.
+
+  Both are reachable through `--vel-width`, which is a physical width: on a cube
+  whose channels are already a large fraction of it, the requested segment count
+  approaches the channel count and the jittered knots pile up against the end of
+  the band. FITPACK then rejects the fit from inside Fortran as a bare
+  `TypeError: An error occurred`, naming no parameter — and because the
+  exception escaped `ContSub.fitContinuum` rather than marking the spectrum bad,
+  it killed the whole run and left zero-filled output cubes behind.
+
+  Knots are now clipped to the last interior point and thinned evenly to the
+  FITPACK limit when there are too many. Both bounds sit orders of magnitude
+  away from any realistic parameterisation — a 250 km/s window over 26 kHz
+  channels asks for ~4 segments in 1000 points — so no fit that already worked
+  changes.
+
+- **Both spline fit-models now work on a cube whose spectral axis descends.**
+  scipy's spline fitters require strictly increasing x. A FITS spectral axis
+  descends whenever `CDELT` is negative — ordinary on its own, and unavoidable
+  for the velocity and wavelength axes above, since both run opposite to
+  frequency. On such a cube `--fit-model b-spline` died with a bare
+  `ValueError: Error on input data` that took the run with it and left
+  zero-filled output cubes behind, and `--fit-model gcv-spline` failed once per
+  spectrum, which `ContSub.fitContinuum` turned into an all-NaN cube and no
+  error at all. `polynomial` and the median filters were unaffected.
+
+  `FitFunc.ascending` now reverses the fitting input where needed. Only the
+  input is reordered — the fit is still evaluated on the cube's own grid, so it
+  lines up channel for channel — and a spline is invariant under reversing x and
+  y together, so results that already worked are unchanged bit for bit.
+
+- **The CLI reference documentation is no longer empty.** The Stimela 3 port made
+  `parser.<x>.runit` a plain function, but `docs/source/reference/reference.rst`
+  still pointed sphinx-click at it. sphinx-click reports "is not click.Command or
+  click.Group" and drops the directive, so the page rendered with no commands on
+  it at all while the build still succeeded — and docs build on Read the Docs
+  rather than in CI, so nothing caught it. The directives now name `command`.
 
 - **An `auto` Doppler channel grid no longer loses a channel to floating point.**
   `common_channel_grid` derives the output length by dividing the common span by
@@ -50,27 +138,6 @@ project's former name, **contsub**.
   produced before. No data moves: the grid was guard-trimmed either way, and
   both edges stay strictly inside the shifted band. `vis-mowjsub` and
   `im-mowjsub` are affected identically, as is `doppler-mowjsub`.
-
-### Changed
-
-- **`vis-mowjsub --output-column` no longer defaults to `LINE_DATA`.** It is now
-  required. `LINE_DATA` is not an MS-standard column name, and defaulting to it
-  pushed a non-standard name into every tool downstream of the result. There is
-  no standard name for continuum-subtracted visibilities, so mowjsub no longer
-  invents one; pass `--output-column DATA` for the common case of feeding an
-  imager directly. This is a breaking CLI change, taken during the 2.0 release
-  candidates rather than after.
-
-  Dropping the default exposed a hazard it had been hiding: without
-  `--output-ms` the residual is written back into the input MS, so
-  `--output-column DATA` there would overwrite the visibilities the fit was made
-  from. That combination is now refused.
-
-- **An already-regridded MS is refused rather than corrected twice.**
-  `doppler_regrid_dataset` checks `SPECTRAL_WINDOW::MEAS_FREQ_REF` and requires a
-  topocentric input grid. This closes a live hole in `vis-mowjsub
-  --doppler-frame`, which would previously have applied the frame conversion on
-  top of one CASA `mstransform` had already applied.
 
 ### Added
 
@@ -96,7 +163,8 @@ project's former name, **contsub**.
   tenth of a channel. Unambiguously right for placing several observations on one
   grid for stacking, which is a pure shift per cube. Cube metadata is resolved
   from the header with `--doppler-time`, `--doppler-telescope` and
-  `--doppler-phase-centre` as overrides. Requires the spectral axis on `NAXIS3`.
+  `--doppler-phase-centre` as overrides. The axis order is immaterial: every
+  axis is matched by what the WCS calls it.
 
 - **Doppler correction for the visibility plane.** `--doppler-frame` resamples
   continuum-subtracted visibilities onto a channel grid fixed in a chosen
