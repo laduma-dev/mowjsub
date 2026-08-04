@@ -76,6 +76,8 @@ Because the output channel grid differs from the input one, ``--doppler-frame`` 
 
 ``--output-column`` is required and has no default: there is no standard MS column name for continuum-subtracted visibilities, so mowjsub does not invent one. ``DATA`` is usually the right answer when the result goes straight to an imager. Note that without ``--output-ms`` the column is written back into the input MS, so naming the column you are reading is refused rather than allowed to destroy it.
 
+For the same reason, ``--output-ms`` may not name the MS being read: the output is built from the input's row metadata and written as a new table, so that would overwrite the input while the fit was still reading from it. Paths are compared resolved, so a trailing slash, a relative path or a symlink will not get round it.
+
 Available frames are ``topo``, ``geo``, ``bary``, ``lsrk``, ``lsrd``, ``galacto``, ``lgroup``, ``cmb`` and ``source``, matching the options CASA accepts. ``bary`` and ``lsrk`` are the usual choices for extragalactic and Galactic HI respectively. The frame velocities and the way conversion steps are composed follow casacore, so the grids agree with CASA's to well under 0.1 m/s. ``source`` additionally needs a systemic velocity, taken from the MS ``SOURCE::SYSVEL`` column or from ``--doppler-source-vel`` in km/s.
 
 By default (``--doppler-chan-grid auto``) the output grid is derived from the observation: the range of sky frequencies covered at *every* timestamp, with one guard channel dropped at each end so no output channel ever falls outside the observed band. Since :command:`vis-mowjsub` processes one MS at a time, ``auto`` cannot align several MSs with each other. To put a set of observations on one common grid, compute it once and pass it explicitly:
@@ -157,4 +159,8 @@ A cube carries far less metadata than an MS, so the correction is resolved from 
 
 Both the continuum and line cubes are written on the corrected grid, so the pair stays recombinable, and the spectral WCS is rewritten with the new ``SPECSYS``. Stale velocity keywords (``ALTRVAL``, ``ALTRPIX``, ``VELREF``) are dropped rather than left describing the old grid. ``--doppler-frame source`` needs ``--doppler-source-vel``, since a cube has no ``SOURCE::SYSVEL`` to fall back on.
 
-The spectral axis must be ``NAXIS3``, i.e. the axis order must be ``RA, DEC, FREQ[, STOKES]``. A cube with STOKES on ``NAXIS3`` and FREQ on ``NAXIS4`` is refused with a message saying so, whether or not a Doppler correction was asked for -- that layout is unsupported throughout :command:`im-mowjsub`, not just here. Reorder the axes (CASA ``imtrans``) and try again.
+The axis order does not matter. Each axis is matched by what the WCS calls it, not by where it sits, so a cube with STOKES on ``NAXIS3`` and FREQ on ``NAXIS4`` — legal, and what CASA ``exportfits`` can emit — is read and written back in its own layout. There is no need to reorder anything first.
+
+A cube already on a non-topocentric grid is refused rather than corrected twice, exactly as an already-regridded MS is. mowjsub reads ``SPECSYS`` to decide, so a cube imaged from an ``mstransform`` output, or one an earlier :command:`im-mowjsub --doppler-frame` run produced, is caught. A cube with no ``SPECSYS`` at all is taken on trust.
+
+If the spectral axis is a velocity (``VOPT``, ``VRAD``, ``VELO``) or a wavelength (``WAVE``) rather than a frequency, it is converted using the Doppler convention the ``CTYPE`` names and the header's ``RESTFRQ``. A velocity axis with no rest frequency in the header is refused; pass ``--rest-freq`` in MHz to supply one. This applies to :command:`im-mowjsub` as a whole, not just the Doppler path — the fitters size their spline segments and filter windows off the same channel grid.

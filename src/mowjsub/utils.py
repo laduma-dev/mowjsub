@@ -3,6 +3,7 @@ import logging
 import os
 import warnings
 from collections import namedtuple
+from pathlib import Path
 from typing import Dict
 
 import astropy.io.fits as fitsio
@@ -250,24 +251,66 @@ def write_cubes(outputs, overwrite=False):
             handle.close()
 
 
+#: Doppler convention each velocity-like FITS spectral ``CTYPE`` is defined in.
+#: The distinction is not cosmetic: for a 1000 km/s source at 1.4 GHz the
+#: optical and radio conventions put the line 15.8 kHz apart, well over half a
+#: 26 kHz MeerKAT channel.
+DOPPLER_CONVENTIONS = {
+    "VOPT": units.doppler_optical,
+    # FELO is the deprecated spelling of VOPT. astropy's `wcs.fix()` usually
+    # translates it to VOPT-F2W, but not from every header.
+    "FELO": units.doppler_optical,
+    "VRAD": units.doppler_radio,
+    "VELO": units.doppler_relativistic,
+}
+
+
+def _rest_frequency(wcs):
+    """Rest frequency of a cube as a Quantity, from ``RESTFRQ`` or ``RESTWAV``.
+
+    ``RESTFREQ`` -- the deprecated spelling, and the one ``--rest-freq`` writes
+    -- reaches ``wcs.restfrq`` too; wcslib treats it as an alias.
+    """
+    if wcs.wcs.restfrq and np.isfinite(wcs.wcs.restfrq):
+        return wcs.wcs.restfrq * units.Hz
+
+    if wcs.wcs.restwav and np.isfinite(wcs.wcs.restwav):
+        return (wcs.wcs.restwav * units.m).to(units.Hz, equivalencies=units.spectral())
+
+    return None
+
+
 def spectral_frequencies(header):
     """Channel frequencies of a cube, in Hz.
 
     The grid is read through the *low-level* WCS, which is what makes this
-    independent of two things the previous implementation was tied to. It
-    returns SI regardless of ``CUNIT``, so there is no unit to guess; and it
-    converts pixels to frequencies without an observation time, where the
-    high-level WCS refuses to do so at all. The spectral axis is whichever one
-    the WCS says it is, rather than ``NAXIS3``.
+    independent of two things the previous implementation was tied to: it
+    converts pixels to world values without an observation time, where the
+    high-level WCS refuses to do so at all, and the spectral axis is whichever
+    one the WCS says it is, rather than ``NAXIS3``.
+
+    What the low-level API does *not* do is give you a frequency. It returns the
+    axis in its own SI unit, so a ``FREQ`` axis in MHz does arrive as Hz -- but a
+    ``VOPT`` axis arrives as m/s and a ``WAVE`` axis as metres, and neither
+    announces itself. Taking those on trust is silent, not loud: on a 10 km/s
+    velocity axis the numbers read as Hz give :func:`chans_in_velwidth` a channel
+    2600 km/s wide instead of 10, so it sizes the fit window at a single channel
+    and the continuum model is quietly worthless. The axis is therefore converted
+    here, through the rest frequency and the Doppler convention its ``CTYPE``
+    names.
 
     Args:
         header: FITS header of a spectral cube.
 
     Returns:
-        np.ndarray: Channel frequency in Hz, one per channel.
+        np.ndarray: Channel frequency in Hz, one per channel. A wavelength or
+        velocity axis converts to *decreasing* frequency, so the grid is
+        returned in the axis's own direction rather than resorted.
 
     Raises:
-        RuntimeError: The header describes no spectral axis.
+        RuntimeError: The header describes no spectral axis, or one that cannot
+            be converted to frequency -- a velocity axis with no rest frequency,
+            or a ``CTYPE`` mowjsub does not know how to interpret.
     """
     wcs = WCS(header)
     axis = wcs.wcs.spec
@@ -275,8 +318,40 @@ def spectral_frequencies(header):
         raise RuntimeError("This cube has no spectral axis.")
 
     nchan = int(header[f"NAXIS{axis + 1}"])
+    ctype = str(wcs.wcs.ctype[axis])
 
-    return np.asarray(wcs.spectral.array_index_to_world_values(np.arange(nchan)), dtype=float)
+    # No `or "Hz"` fallback on the unit: wcslib already defaults a FREQ axis
+    # with no CUNIT to Hz, so the only axes that report no unit at all are the
+    # dimensionless ones (ZOPT, BETA), which the fallback would have waved
+    # through as frequencies.
+    spectral = wcs.spectral
+    values = np.asarray(spectral.array_index_to_world_values(np.arange(nchan)), dtype=float) * units.Unit(spectral.world_axis_units[0])
+
+    if values.unit.is_equivalent(units.Hz):
+        return values.to_value(units.Hz)
+
+    if values.unit.is_equivalent(units.m):
+        return values.to_value(units.Hz, equivalencies=units.spectral())
+
+    if values.unit.is_equivalent(units.m / units.s):
+        # 'VOPT-F2W' and 'VELO-LSR' both carry their convention in the first
+        # four characters; the algorithm code after the dash does not change it.
+        convention = DOPPLER_CONVENTIONS.get(ctype.strip().split("-")[0].upper())
+        if convention is None:
+            raise RuntimeError(
+                f"This cube's spectral axis is CTYPE='{ctype}', a velocity axis mowjsub cannot assign a Doppler convention to. Convert it to FREQ, VOPT, VRAD or VELO first."
+            )
+
+        rest = _rest_frequency(wcs)
+        if rest is None:
+            raise RuntimeError(
+                f"This cube's spectral axis is CTYPE='{ctype}', a velocity, but the header carries no rest frequency (RESTFRQ or RESTWAV) to convert it with. Pass --rest-freq."
+            )
+
+        return values.to_value(units.Hz, equivalencies=convention(rest))
+
+    unit = f"units of '{values.unit}'" if values.unit != units.dimensionless_unscaled else "no units"
+    raise RuntimeError(f"This cube's spectral axis is CTYPE='{ctype}', in {unit}, which mowjsub cannot convert to a frequency. Convert the axis to FREQ first.")
 
 
 class FitsHeader:
@@ -548,6 +623,39 @@ def require_topocentric(spw, spw_id, ms_path):
     )
 
 
+def require_distinct_ms(input_ms, output_ms):
+    """Refuse an ``--output-ms`` that is the MS being read.
+
+    ``output_ms_dataset`` builds a fresh dataset from the input's row metadata
+    and ``xds_to_table`` then writes it, so naming the input means writing an MS
+    on top of itself while it is still being read from. Where a Doppler
+    correction is involved the channel count differs too, and
+    ``copy_ms_subtables`` would copy every subtable onto itself. The input is
+    not recoverable afterwards, and nothing further down complains: dask-ms
+    writes what it is given.
+
+    Paths are compared resolved, so a trailing slash, a relative path or a
+    symlink cannot slip past.
+
+    Args:
+        input_ms (str|Path): MS being read.
+        output_ms (str|Path): MS the caller asked to write.
+
+    Raises:
+        RuntimeError: The two name the same MS.
+    """
+    if output_ms is None:
+        return
+
+    if Path(input_ms).resolve() != Path(output_ms).resolve():
+        return
+
+    raise RuntimeError(
+        f"--output-ms={output_ms} is the MS being read. Writing it would overwrite the input while the fit is still reading from it, "
+        f"and the original could not be recovered. Give --output-ms a new path, or drop it to write a column back into {input_ms}."
+    )
+
+
 def _regrid_block(data, flags, weights, times, utimes, ufactors, freqs_in, freqs_out, interpolation):
     """Regrid one row block, looking each row's Doppler factor up by timestamp."""
     factors = ufactors[np.clip(np.searchsorted(utimes, times), 0, ufactors.size - 1)]
@@ -718,6 +826,39 @@ def cube_spectral_axis(header):
     return spec
 
 
+def require_topocentric_cube(header):
+    """Refuse a cube whose spectral axis has already been moved off the topocentric grid.
+
+    The image-plane counterpart of :func:`require_topocentric`, and needed for
+    the same reason: ``doppler_factors`` converts *from* topocentric frequency,
+    so a cube that has already been shifted gets the conversion applied twice.
+    A cube reaches that state easily and without saying so loudly -- imaging an
+    MS that CASA ``mstransform`` regridded produces one, and so does a previous
+    ``im-mowjsub --doppler-frame`` run, since :func:`apply_cube_doppler` stamps
+    the new frame into ``SPECSYS`` on the way out.
+
+    Args:
+        header: FITS header of the cube.
+
+    Raises:
+        RuntimeError: ``SPECSYS`` names a frame other than topocentric.
+    """
+    # Not every cube carries the keyword; absent it, take the grid on trust.
+    # This mirrors the MEAS_FREQ_REF case and is the same bet: a header that
+    # says nothing is far more often an imager that omitted it than a regrid
+    # that hid itself.
+    specsys = str(header.get("SPECSYS", "")).strip().upper()
+    if not specsys or specsys == FITS_SPECSYS["topo"]:
+        return
+
+    names = {value: key for key, value in FITS_SPECSYS.items()}
+    found = names.get(specsys, specsys)
+    raise RuntimeError(
+        f"This cube's spectral axis is already on a {found.upper()} grid (SPECSYS='{specsys}'), not a topocentric one. "
+        f"Doppler-correcting it would apply the frame conversion twice. Use a cube imaged from the visibilities as they came off the telescope."
+    )
+
+
 def _cube_phase_centre(header, override=None):
     """Field centre of a cube in radians, from the WCS or an explicit override."""
     if override:
@@ -824,8 +965,14 @@ def plan_cube_doppler(
 
     Returns:
         CubeDopplerPlan
+
+    Raises:
+        RuntimeError: The cube has no spectral axis, is already on a
+            non-topocentric grid (:func:`require_topocentric_cube`), or carries
+            none of the metadata the correction needs and no override for it.
     """
     axis = cube_spectral_axis(header)
+    require_topocentric_cube(header)
 
     centre = _cube_phase_centre(header, phase_centre)
     location = _cube_location(header, telescope)

@@ -11,6 +11,7 @@ import dask.array as da
 import numpy as np
 
 from mowjsub import utils
+from mowjsub.exceptions import BadFitError
 from mowjsub.fitfuncs import (
     FitBSpline,
     FitGCVSpline,
@@ -120,6 +121,182 @@ class TestFitsFunc(unittest.TestCase):
         assert baseline.shape == self.data.shape
 
 
+class TestBSplineKnotBounds(unittest.TestCase):
+    """Knot counts and positions FITPACK will actually accept.
+
+    ``--vel-width`` is a physical width, so the number of spline segments it
+    asks for depends on how coarsely the cube is channelised. On a cube whose
+    channels are already a large fraction of that width it approaches one
+    segment per channel, which pushes the jittered knots past both of FITPACK's
+    limits: they must lie strictly inside the data range, and there can be at
+    most ``m - k - 1`` of them. Neither was enforced, and FITPACK reports the
+    violation as a bare ``TypeError: An error occurred`` from inside Fortran
+    that escaped ``ContSub.fitContinuum`` and killed the whole run.
+    """
+
+    def setUp(self):
+        rng = np.random.default_rng(20260804)
+        self.nchan = nchan = 64
+        # 1 MHz channels at 1.42 GHz: ~216 km/s each, so a 250 km/s vel-width
+        # is barely more than one channel. This is the case that failed.
+        self.freqs = 1420.0 - np.arange(nchan) * 1.0
+        self.data = 2.0 + 0.001 * np.arange(nchan) + 0.01 * rng.normal(size=nchan)
+        self.mask = np.zeros(nchan, dtype=bool)
+
+    def test_a_velwidth_of_about_one_channel_still_fits(self):
+        fitter = FitBSpline(self.freqs, order=3, velwidth=250, seed=7)
+        fitter.prepare()
+
+        assert fitter.chanwidth == 1, "the parameterisation this test is about"
+
+        baseline = fitter.fit(self.data.copy(), self.mask.copy(), None)
+
+        assert baseline.shape == self.data.shape
+        assert np.isfinite(baseline).all()
+
+    def test_more_segments_than_channels_is_thinned_not_refused(self):
+        """A chanwidth of 1 asks for one knot per channel; FITPACK allows m-k-1."""
+        fitter = FitBSpline(self.freqs, order=3, chanwidth=1, seed=7)
+        fitter.prepare()
+
+        assert fitter.max_spline_order > self.nchan, "more segments requested than there are points"
+
+        baseline = fitter.fit(self.data.copy(), self.mask.copy(), None)
+
+        assert np.isfinite(baseline).all()
+
+    def test_the_whole_parameter_grid_fits_or_reports_a_bad_fit(self):
+        """Nothing may escape as a raw FITPACK error, whatever the parameters.
+
+        Masking matters here: the knot bounds are set by the *valid* point
+        count, not the channel count, so a heavily masked spectrum tightens them
+        without changing anything the caller passed.
+        """
+        for order in (1, 2, 3, 5):
+            for chanwidth in (1, 2, 3, 11, self.nchan // 2, self.nchan, self.nchan + 5):
+                for masked in (0, 20, 40):
+                    mask = self.mask.copy()
+                    mask[:masked] = True
+
+                    fitter = FitBSpline(self.freqs, order=order, chanwidth=chanwidth, seed=7)
+                    fitter.prepare()
+                    try:
+                        baseline = fitter.fit(self.data.copy(), mask, None)
+                    except BadFitError:
+                        # The intended signal for a spectrum too sparse to fit;
+                        # ContSub turns it into NaN for that pixel.
+                        continue
+
+                    assert np.isfinite(baseline).all(), (order, chanwidth, masked)
+
+    def test_an_ordinary_cube_is_nowhere_near_the_bounds(self):
+        """The clamps must be inert on real parameterisations, so no fit changes.
+
+        A 26 kHz MeerKAT channel against a 250 km/s window is ~4 segments over
+        1000 channels -- three orders of magnitude clear of the m-k-1 limit.
+        """
+        freqs = 1361.0 + np.arange(1000) * 0.026
+        fitter = FitBSpline(freqs, order=3, velwidth=250, seed=7)
+        fitter.prepare()
+
+        knots = np.linspace(0, 1000, fitter.max_spline_order, dtype=int)[1:-1]
+
+        assert knots.size < 1000 - 3 - 1
+        assert knots.max() < 1000 - 2
+
+
+class TestDescendingFrequencyGrid(unittest.TestCase):
+    """A spectral axis that runs downwards in frequency.
+
+    Ordinary FITS: any cube with a negative ``CDELT`` on the spectral axis, and
+    unavoidable for one whose axis is a velocity or a wavelength, since both run
+    opposite to frequency. scipy's spline fitters require strictly increasing x,
+    so both spline models were broken on such a cube -- ``b-spline`` died with a
+    bare ``ValueError: Error on input data`` that took the whole run with it, and
+    ``gcv-spline`` failed per spectrum, which ``ContSub.fitContinuum`` turned
+    into an all-NaN cube and no error at all.
+
+    The same physical spectrum stored in the opposite direction must give the
+    same continuum, so each fitter is checked against its own ascending result.
+    """
+
+    def setUp(self):
+        rng = np.random.default_rng(20260804)
+        self.nchan = nchan = 128
+        self.freqs = 1400.0 + np.arange(nchan) * 1.0
+        self.data = 2.0 + 0.001 * np.arange(nchan) + 0.01 * rng.normal(size=nchan)
+        self.weights = 1.0 + rng.random(nchan)
+        self.mask = np.zeros(nchan, dtype=bool)
+
+    def _fitters(self, freqs):
+        return {
+            "b-spline": FitBSpline(freqs, order=3, velwidth=2000, seed=7),
+            "gcv-spline": FitGCVSpline(freqs, fit_lam=1e-3),
+            "polynomial": FitPolynomial(freqs, order=2),
+            "median-filter": FitMedFilterFast(freqs, velwidth=2000),
+        }
+
+    def _fit(self, freqs, data, weights, mask):
+        results = {}
+        for name, fitter in self._fitters(freqs).items():
+            fitter.prepare()
+            results[name] = fitter.fit(data.copy(), mask=mask.copy(), weights=weights)
+
+        return results
+
+    def _both_directions(self, weights=None, mask=None):
+        """Fit the same physical spectrum stored each way round.
+
+        Everything channel-indexed reverses together -- data, weights and mask
+        -- so the two runs differ only in which end of the band comes first.
+        """
+        mask = self.mask if mask is None else mask
+
+        ascending = self._fit(self.freqs, self.data, weights, mask)
+        descending = self._fit(
+            self.freqs[::-1],
+            self.data[::-1],
+            None if weights is None else weights[::-1],
+            mask[::-1],
+        )
+
+        return ascending, descending
+
+    def test_every_fitter_matches_its_ascending_result(self):
+        ascending, descending = self._both_directions()
+
+        for name in ascending:
+            np.testing.assert_allclose(descending[name][::-1], ascending[name], rtol=1e-12, atol=1e-12, err_msg=name)
+
+    def test_weights_are_reordered_with_the_data(self):
+        """The weight vector is sliced by the same mask, so it has to travel with it."""
+        ascending, descending = self._both_directions(weights=self.weights)
+
+        for name in ascending:
+            np.testing.assert_allclose(descending[name][::-1], ascending[name], rtol=1e-12, atol=1e-12, err_msg=name)
+
+    def test_a_masked_spectrum_still_fits(self):
+        """Masking leaves x descending but no longer evenly spaced."""
+        mask = self.mask.copy()
+        mask[10:20] = True
+        mask[70:75] = True
+
+        ascending, descending = self._both_directions(mask=mask)
+
+        for name in ("b-spline", "gcv-spline"):
+            assert np.isfinite(descending[name]).all(), name
+            np.testing.assert_allclose(descending[name][::-1], ascending[name], rtol=1e-12, atol=1e-12, err_msg=name)
+
+    def test_an_ascending_grid_is_left_alone(self):
+        """`ascending` must be a no-op on the grid every existing cube already has."""
+        fitter = FitBSpline(self.freqs, order=3, velwidth=2000, seed=7)
+        x, data, weights = fitter.ascending(self.freqs, self.data, self.weights)
+
+        assert x is self.freqs
+        assert data is self.data
+        assert weights is self.weights
+
+
 class TestZdsFromFits(unittest.TestCase):
     """The reader's contract with the rest of the image plane."""
 
@@ -217,6 +394,67 @@ class TestZdsFromFits(unittest.TestCase):
         zds = utils.zds_from_fits(path, rest_freq=1420.40575)
 
         assert zds.attrs["header"]["RESTFREQ"] == 1420.40575 * 1e6
+
+
+class TestRequireDistinctMs(unittest.TestCase):
+    """`--output-ms` naming the MS being read.
+
+    `output_ms_dataset` builds a fresh dataset from the input's row metadata and
+    `xds_to_table` writes it, so the input would be overwritten while the fit was
+    still reading from it -- and with a Doppler correction the channel count
+    differs too, so re-running could not recover it. dask-ms writes what it is
+    given and says nothing.
+
+    Pure path arithmetic, so none of this needs an MS on disk.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.ms = self.tmpdir / "input.ms"
+        self.ms.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_a_distinct_output_is_allowed(self):
+        utils.require_distinct_ms(self.ms, self.tmpdir / "output.ms")
+
+    def test_no_output_ms_is_allowed(self):
+        """vis-mowjsub without --output-ms writes a column back, which is its own path."""
+        utils.require_distinct_ms(self.ms, None)
+
+    def test_the_same_path_is_refused(self):
+        with self.assertRaises(RuntimeError) as raised:
+            utils.require_distinct_ms(self.ms, self.ms)
+
+        assert "is the MS being read" in str(raised.exception)
+
+    def test_a_trailing_slash_does_not_disguise_it(self):
+        with self.assertRaises(RuntimeError):
+            utils.require_distinct_ms(self.ms, f"{self.ms}/")
+
+    def test_a_relative_path_does_not_disguise_it(self):
+        cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        try:
+            with self.assertRaises(RuntimeError):
+                utils.require_distinct_ms("input.ms", "./input.ms")
+        finally:
+            os.chdir(cwd)
+
+    def test_a_symlink_does_not_disguise_it(self):
+        link = self.tmpdir / "link.ms"
+        link.symlink_to(self.ms)
+
+        with self.assertRaises(RuntimeError):
+            utils.require_distinct_ms(link, self.ms)
+
+    def test_an_output_that_does_not_exist_yet_still_compares(self):
+        """The usual case: the output is a path, not a directory, when this runs."""
+        utils.require_distinct_ms(self.ms, self.tmpdir / "not-created-yet.ms")
+
+        with self.assertRaises(RuntimeError):
+            utils.require_distinct_ms(self.tmpdir / "absent.ms", self.tmpdir / "absent.ms")
 
 
 class TestWriteCubes(unittest.TestCase):

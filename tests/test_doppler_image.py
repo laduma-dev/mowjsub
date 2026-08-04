@@ -11,6 +11,8 @@ from pathlib import Path
 
 import astropy.io.fits as fitsio
 import numpy as np
+from astropy import units
+from astropy.wcs import WCS
 from click.testing import CliRunner
 
 from mowjsub.doppler import FITS_SPECSYS, resample_cube
@@ -18,6 +20,7 @@ from mowjsub.parser.im_mowjsub import command
 from mowjsub.utils import (
     FitsHeader,
     apply_cube_doppler,
+    chans_in_velwidth,
     cube_spectral_axis,
     plan_cube_doppler,
     spectral_frequencies,
@@ -34,9 +37,10 @@ def _header(nchan=32, f0=1.4e9, df=1e6, npix=4, stokes=False, spectral_axis=3):
     channel count from; ``spectral_frequencies`` reads it off the header, for
     whichever axis the WCS says is spectral.
 
-    ``spectral_axis=4`` puts STOKES on NAXIS3 and FREQ on NAXIS4. The spectral
-    grid handles that layout; ``im-mowjsub`` as a whole still refuses it,
-    because the continuum write-back places its axes by fixed transpose.
+    ``spectral_axis=4`` puts STOKES on NAXIS3 and FREQ on NAXIS4 -- legal, and
+    what CASA ``exportfits`` can emit. Every path handles that layout: the
+    continuum write-back transposes by name, so a cube round-trips in whatever
+    order it arrived in.
     """
     header = fitsio.Header()
     header["CTYPE1"] = "RA---SIN"
@@ -92,6 +96,33 @@ def _cube(path, nchan=32, npix=4, line_channel=None, stokes=False, **kwargs):
     fitsio.PrimaryHDU(data, header=header).writeto(path, overwrite=True)
 
     return header
+
+
+def _velocity_header(ctype, nchan=32, crval=1000.0, cdelt=10.0, cunit="km/s"):
+    """A cube whose spectral axis is not a frequency.
+
+    Defaults to a 1000 km/s optical-velocity axis in 10 km/s channels, which is
+    an ordinary way to store an HI cube and the layout that used to be read as
+    though the numbers were Hz.
+    """
+    header = _header(nchan=nchan)
+    header["CTYPE3"], header["CRVAL3"], header["CDELT3"], header["CUNIT3"] = ctype, crval, cdelt, cunit
+
+    return header
+
+
+def _reference_frequencies(header, convention):
+    """The same grid via astropy's own conversion, as an independent check.
+
+    Deliberately not the code under test's route: this goes through
+    ``Quantity.to`` with the equivalency stated here rather than derived from
+    the CTYPE, so a wrong convention in the lookup table shows up as a mismatch.
+    """
+    axis = WCS(header).wcs.spec
+    nchan = int(header[f"NAXIS{axis + 1}"])
+    velocities = (header["CRVAL3"] + np.arange(nchan) * header["CDELT3"]) * units.Unit(header["CUNIT3"])
+
+    return velocities.to_value(units.Hz, equivalencies=convention(header["RESTFRQ"] * units.Hz))
 
 
 class TestSpectralAxis(unittest.TestCase):
@@ -172,6 +203,164 @@ class TestSpectralFrequencies(unittest.TestCase):
         header = _header()
 
         np.testing.assert_allclose(FitsHeader(header).retFreq(), spectral_frequencies(header) / 1e6, rtol=1e-12)
+
+
+class TestNonFrequencySpectralAxes(unittest.TestCase):
+    """Axes the low-level WCS does not hand back in Hz.
+
+    ``array_index_to_world_values`` returns each axis in its *own* SI unit, so a
+    FREQ axis in MHz does arrive as Hz -- but a VOPT axis arrives as m/s and a
+    WAVE axis as metres, and neither says so. Taking them on trust is silent
+    rather than loud, which is what these pin: on the 10 km/s axis below, the
+    numbers read as Hz make ``chans_in_velwidth`` compute a 2600 km/s channel
+    instead of a 10 km/s one, so it clamps the fit window to a single channel.
+    """
+
+    def test_an_optical_velocity_axis_becomes_frequency(self):
+        header = _velocity_header("VOPT")
+
+        freqs = spectral_frequencies(header)
+
+        np.testing.assert_allclose(freqs, _reference_frequencies(header, units.doppler_optical), rtol=1e-12)
+        # Not the raw m/s the axis is stored in.
+        assert freqs.min() > 1.4e9
+
+    def test_the_doppler_convention_comes_from_the_ctype(self):
+        """VOPT, VRAD and VELO are three different grids, not one grid named three ways."""
+        conventions = {
+            "VOPT": units.doppler_optical,
+            "VRAD": units.doppler_radio,
+            "VELO": units.doppler_relativistic,
+        }
+
+        grids = {}
+        for ctype, convention in conventions.items():
+            header = _velocity_header(ctype)
+            grids[ctype] = spectral_frequencies(header)
+            np.testing.assert_allclose(grids[ctype], _reference_frequencies(header, convention), rtol=1e-12)
+
+        # At 1000 km/s the optical and radio conventions part company by ~15 kHz
+        # at L band, which is most of a MeerKAT channel. Reading one as the
+        # other is a real error, not a rounding one.
+        assert abs(grids["VOPT"][0] - grids["VRAD"][0]) > 1e4
+
+    def test_an_algorithm_code_does_not_change_the_convention(self):
+        """'VOPT-F2W' is still optical; only the first four characters name the convention.
+
+        The 'F2W' code says the axis is sampled linearly in wavelength rather
+        than in velocity, so the grid is not identical to a plain VOPT one --
+        1.5 kHz apart at the far end of this band. The reference channel is
+        identical, and the whole grid stays an order of magnitude nearer optical
+        than the 15.8 kHz that separates optical from radio.
+        """
+        freqs = spectral_frequencies(_velocity_header("VOPT-F2W"))
+        optical = _reference_frequencies(_velocity_header("VOPT"), units.doppler_optical)
+        radio = _reference_frequencies(_velocity_header("VOPT"), units.doppler_radio)
+
+        np.testing.assert_allclose(freqs[0], optical[0], rtol=1e-12)
+        assert np.abs(freqs - optical).max() < 0.2 * np.abs(optical - radio).min()
+
+    def test_a_wavelength_axis_becomes_frequency(self):
+        header = _velocity_header("WAVE", crval=0.21, cdelt=1e-4, cunit="m")
+
+        freqs = spectral_frequencies(header)
+
+        np.testing.assert_allclose(freqs, (np.asarray([0.21 + index * 1e-4 for index in range(32)]) * units.m).to_value(units.Hz, equivalencies=units.spectral()), rtol=1e-12)
+        # Frequency decreases as wavelength increases; the grid keeps the axis's
+        # own direction rather than being resorted behind the caller's back.
+        assert freqs[0] > freqs[-1]
+
+    def test_a_velocity_axis_with_no_rest_frequency_is_refused(self):
+        """Refused, not guessed at: there is no default rest frequency to fall back on."""
+        header = _velocity_header("VOPT")
+        del header["RESTFRQ"]
+
+        with self.assertRaises(RuntimeError) as raised:
+            spectral_frequencies(header)
+
+        assert "rest frequency" in str(raised.exception)
+        assert "--rest-freq" in str(raised.exception)
+
+    def test_the_deprecated_restfreq_spelling_is_honoured(self):
+        """``--rest-freq`` writes RESTFREQ, which is exactly how a user rescues such a cube."""
+        header = _velocity_header("VOPT")
+        rest = header.pop("RESTFRQ")
+        header["RESTFREQ"] = rest
+
+        np.testing.assert_allclose(spectral_frequencies(header), _reference_frequencies(_velocity_header("VOPT"), units.doppler_optical), rtol=1e-12)
+
+    def test_a_dimensionless_spectral_axis_is_refused(self):
+        """ZOPT is a spectral axis with no unit at all, so it cannot be waved through as Hz."""
+        header = _velocity_header("ZOPT", crval=0.003, cdelt=1e-5, cunit="")
+
+        with self.assertRaises(RuntimeError) as raised:
+            spectral_frequencies(header)
+
+        assert "ZOPT" in str(raised.exception)
+
+    def test_the_fit_window_matches_the_equivalent_frequency_cube(self):
+        """What the bug actually cost: the fitters size their window off this grid."""
+        velocity = spectral_frequencies(_velocity_header("VOPT"))
+        frequency = spectral_frequencies(_header(nchan=32, f0=velocity[0], df=velocity[1] - velocity[0]))
+
+        assert chans_in_velwidth(velocity, 250e3) == chans_in_velwidth(frequency, 250e3)
+        assert chans_in_velwidth(velocity, 250e3) == 25
+
+
+class TestAlreadyCorrected(unittest.TestCase):
+    """The cube-side counterpart of the MEAS_FREQ_REF check on an MS.
+
+    ``doppler_factors`` converts *from* topocentric frequency, so a cube that has
+    already been shifted -- imaged from an ``mstransform`` output, or produced by
+    an earlier ``im-mowjsub --doppler-frame`` run -- would get the conversion
+    applied a second time. Nothing about the result would look wrong.
+    """
+
+    def test_a_barycentric_cube_is_refused(self):
+        header = _header()
+        header["SPECSYS"] = "BARYCENT"
+
+        with self.assertRaises(RuntimeError) as raised:
+            plan_cube_doppler(header, "bary")
+
+        assert "BARY" in str(raised.exception)
+        assert "twice" in str(raised.exception)
+
+    def test_the_refusal_does_not_depend_on_the_target_frame(self):
+        """A BARYCENT cube cannot be taken to LSRK either; the input grid is the problem."""
+        header = _header()
+        header["SPECSYS"] = "BARYCENT"
+
+        with self.assertRaises(RuntimeError):
+            plan_cube_doppler(header, "lsrk")
+
+    def test_a_frame_name_mowjsub_has_no_code_for_is_still_refused(self):
+        """HELIOCEN is legal FITS and not in FITS_SPECSYS; report it rather than pass it."""
+        header = _header()
+        header["SPECSYS"] = "HELIOCEN"
+
+        with self.assertRaises(RuntimeError) as raised:
+            plan_cube_doppler(header, "bary")
+
+        assert "HELIOCEN" in str(raised.exception)
+
+    def test_a_topocentric_cube_is_accepted(self):
+        assert plan_cube_doppler(_header(), "bary") is not None
+
+    def test_a_cube_with_no_specsys_is_taken_on_trust(self):
+        """Same bet as the MS path: a silent header is usually an imager that omitted it."""
+        header = _header()
+        del header["SPECSYS"]
+
+        assert plan_cube_doppler(header, "bary") is not None
+
+    def test_a_corrected_cube_will_not_go_round_again(self):
+        """apply_cube_doppler stamps the new frame, so its own output is refused."""
+        header = _header()
+        _, corrected = apply_cube_doppler(np.ones((32, 4, 4), dtype=np.float32), header, plan_cube_doppler(header, "bary"))
+
+        with self.assertRaises(RuntimeError):
+            plan_cube_doppler(corrected, "bary")
 
 
 class TestPlan(unittest.TestCase):

@@ -81,6 +81,36 @@ class FitFunc:
     def fit(self, x, data, mask, weight):
         pass
 
+    def ascending(self, x, data, weights):
+        """Present a fitter's input in increasing-x order.
+
+        scipy's spline fitters require strictly increasing x, and a FITS
+        spectral axis descends whenever ``CDELT`` is negative -- which is
+        *always* the case for a cube whose axis is a velocity or a wavelength,
+        since both run opposite to frequency. Handed such a grid, ``splrep``
+        raised a bare ``ValueError: Error on input data`` that killed the run,
+        and ``make_smoothing_spline`` failed per spectrum, which
+        ``ContSub.fitContinuum`` turned into an all-NaN cube and no error at all.
+
+        Only the *fitting* input needs reordering. ``splev`` and a smoothing
+        spline both evaluate at whatever order they are handed, so the fit is
+        still evaluated on ``self.freqs`` and lines up with the data channel for
+        channel. A spline is invariant under reversing x and y together, so this
+        changes no result that already worked.
+
+        Args:
+            x (np.ndarray): Frequency grid, masked points already removed.
+            data (np.ndarray): Spectrum, matching ``x``.
+            weights (np.ndarray|None): Weights, matching ``x``, or None.
+
+        Returns:
+            tuple: ``(x, data, weights)``, reversed together if x descended.
+        """
+        if x.size > 1 and x[0] > x[-1]:
+            return x[::-1], data[::-1], weights[::-1] if isinstance(weights, np.ndarray) else weights
+
+        return x, data, weights
+
     def default_prepare(self):
         if self.velwidth:
             self.chanwidth = utils.chans_in_velwidth(self.freqs * 1e6, self.velwidth * 1000)
@@ -129,22 +159,48 @@ class FitBSpline(FitFunc):
 
         # Mask invalid or zero-weight points
         mask[np.where(np.isnan(data))] = True
-        x_masked = self.freqs[~mask]
-        data_masked = data[~mask]
+        x_masked, data_masked, weights_masked = self.ascending(
+            self.freqs[~mask],
+            data[~mask],
+            weights[~mask] if isinstance(weights, np.ndarray) else weights,
+        )
 
         knotind = np.linspace(0, x_masked.size, self.max_spline_order, dtype=int)[1:-1]
         chwid = max(1, (self.nchan // self.max_spline_order) // 8)
         knots_idx = self.rng.integers(-chwid, chwid, size=knotind.shape) + knotind
-        knots_idx = np.unique(np.clip(knots_idx, 1, x_masked.size - 1))  # avoid edges
 
-        knot_positions = x_masked[knots_idx]
+        # FITPACK imposes two limits on the interior knots, and neither was
+        # enforced. They must lie *strictly* inside the data range, so the last
+        # usable index is `size - 2`; the bound here was `size - 1`, which is
+        # x[-1] itself. And there can be at most `m - k - 1` of them for m
+        # points of order k. Both are reachable through --vel-width, which is a
+        # physical width and so asks for one segment per channel on a coarsely
+        # channelised cube: `max_spline_order` then approaches the channel count,
+        # packing the jittered knots right up against the end of the spectrum.
+        #
+        # Neither failed usefully. FITPACK rejects the fit from inside Fortran
+        # as a bare `TypeError: An error occurred` or
+        # `ValueError: Error on input data`, naming no parameter, and since the
+        # exception escapes `ContSub.fitContinuum` it took the whole run with it
+        # rather than marking the spectrum bad.
+        max_knots = x_masked.size - self.order - 1
+        if max_knots <= 0:
+            knot_positions = []
+        else:
+            knots_idx = np.unique(np.clip(knots_idx, 1, x_masked.size - 2))
+            if knots_idx.size > max_knots:
+                # Thin evenly rather than truncate, so the knots still span the
+                # band instead of crowding into its low-frequency end.
+                knots_idx = knots_idx[np.linspace(0, knots_idx.size - 1, max_knots, dtype=int)]
+
+            knot_positions = x_masked[knots_idx]
 
         if isinstance(weights, np.ndarray):
             splCfs = splrep(
                 x_masked,
                 data_masked,
                 task=-1,
-                w=weights[~mask],
+                w=weights_masked,
                 t=knot_positions,
                 k=self.order,
             )
@@ -179,12 +235,15 @@ class FitGCVSpline(FitFunc):
             self.prepare()
         mask, _ = self.is_fit_possible(data, mask, raise_exception=True)
 
-        x_masked = self.freqs[~mask]
-        data_masked = data[~mask]
+        x_masked, data_masked, weights_masked = self.ascending(
+            self.freqs[~mask],
+            data[~mask],
+            weights[~mask] if isinstance(weights, np.ndarray) else weights,
+        )
 
         try:
             if isinstance(weights, np.ndarray):
-                smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.fit_lam, w=weights[~mask])
+                smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.fit_lam, w=weights_masked)
             else:
                 smooth_func = make_smoothing_spline(x_masked, data_masked, lam=self.fit_lam)
         except Exception as e:

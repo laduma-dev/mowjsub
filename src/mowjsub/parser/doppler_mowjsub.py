@@ -18,6 +18,7 @@ from mowjsub.utils import (
     doppler_regrid_dataset,
     finalise_regridded_ms,
     get_ds_from_msdsl,
+    require_distinct_ms,
 )
 
 app = BIN.doppler_plane
@@ -45,6 +46,10 @@ def runit(opts):
     input_column = opts.input_column
     output_column = opts.output_column
     frame = opts.doppler_frame
+
+    # Before the MS is opened: the regrid changes the channel count, so writing
+    # over the input would not even be recoverable by re-running.
+    require_distinct_ms(ms, opts.output_ms)
 
     ms_dsl = xds_from_ms(
         ms,
@@ -155,4 +160,4 @@ def doppler_mowjsub(
 #: generically without knowing the function's own name.
 step = doppler_mowjsub
 
-command = make_command(doppler_mowjsub, positional="ms")
+command = make_command(doppler_mowjsub, positional="ms", must_exist=("ms",))

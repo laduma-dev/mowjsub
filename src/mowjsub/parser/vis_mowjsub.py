@@ -30,6 +30,7 @@ from mowjsub.utils import (
     get_ds_from_msdsl,
     ms_to_xarray_dataset,
     output_ms_dataset,
+    require_distinct_ms,
 )
 from mowjsub.visibility_plane import VisContSub
 
@@ -64,6 +65,9 @@ def runit(opts):
     # count, so the result cannot go back into a column of the input MS.
     if doppler_frame and not opts.output_ms:
         raise RuntimeError(f"--doppler-frame={doppler_frame} changes the channel grid, so it needs a separate output MS. Pass --output-ms.")
+
+    require_distinct_ms(ms, opts.output_ms)
+
     outchunks = dict(time=opts.time_chunks, bl_chunks=opts.bl_chunks)
     input_column = opts.input_column
     output_column = opts.output_column
@@ -313,4 +317,4 @@ def vis_mowjsub(
 #: generically without knowing the function's own name.
 step = vis_mowjsub
 
-command = make_command(vis_mowjsub, positional="ms")
+command = make_command(vis_mowjsub, positional="ms", must_exist=("ms",))
