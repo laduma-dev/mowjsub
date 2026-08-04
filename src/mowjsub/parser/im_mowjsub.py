@@ -226,8 +226,13 @@ def im_mowjsub(
     input_image: Path = Field(..., description="Input image"),
     output_prefix: str | None = Field(None, description="Name of ouput image"),
     mask_image: Path | None = Field(None, description="Mask image"),
-    sigma_clip: list[float] | None = Field(None, description="Sigma clip for each iteration. Only required if mask-image is not given."),
-    automask_per_iter: bool = Field(False, description="Generate a new mask per iteration."),
+    sigma_clip: float | None = Field(
+        None,
+        description=(
+            "Sigma-clipping level for the automatic mask, which is built by fitting an unmasked continuum first and clipping that residual -- "
+            "so it works on a cube that still holds its continuum. Only used if --mask-image is not given."
+        ),
+    ),
     fit_model: FIT_MODELS = Field(
         "b-spline",
         description=(

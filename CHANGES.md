@@ -5,6 +5,21 @@ project's former name, **contsub**.
 
 ## Unreleased
 
+### Changed
+
+- **`im-mowjsub --sigma-clip` takes a single value, and `--automask-per-iter` is
+  gone.** Both described an iterative automasking mode that was never
+  implemented: `get_automask` does one fit and one clip, and never read the flag
+  at all. The option's `list[float]` type was not merely unused, it was unusable
+  — `PixSigmaClip` multiplies the whole list against the noise array in one
+  operation, so any count but one mis-broadcast, raising for most lengths and
+  producing a silently wrong mask when the list happened to match the spectral
+  axis. **A command line passing more than one `--sigma-clip`, or
+  `--automask-per-iter`, must drop them**; nothing that worked before stops
+  working, since one value is all that ever did. The multi-iteration example in
+  the usage docs goes with them — it also passed several `--order` and
+  `--segments` values, which have been scalars since the Stimela 3 port.
+
 ### Fixed
 
 - **`--chan-width` is honoured rather than accepted and ignored.** Both

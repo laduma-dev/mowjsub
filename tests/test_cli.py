@@ -270,3 +270,58 @@ class TestChanWidthIsHonoured(unittest.TestCase):
 
         with fitsio.open(f"{other}-cont.fits") as a, fitsio.open(f"{reference}-cont.fits") as b:
             assert not np.array_equal(a[0].data, b[0].data)
+
+
+class TestSigmaClipIsScalar(unittest.TestCase):
+    """``--sigma-clip`` takes one value, and the automask reaches the fit.
+
+    It used to be a ``list[float]`` ("one per iteration"), with a companion
+    ``--automask-per-iter``, but no iteration was ever implemented:
+    ``get_automask`` does one fit and one clip, and never read the flag.
+    ``PixSigmaClip`` multiplies the whole list against the noise array in a
+    single operation, so anything but one value mis-broadcast -- usually a
+    crash, and a silently wrong mask when the list happened to be as long as
+    the spectral axis.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.cube = self.tmpdir / "cube.fits"
+        _write_cube(self.cube)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _im(self, *args):
+        return CliRunner().invoke(im_command, [str(self.cube), *args], catch_exceptions=True)
+
+    def test_a_single_value_is_accepted(self):
+        result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", "--sigma-clip", "3", "--output-prefix", str(self.tmpdir / "out"))
+
+        assert result.exit_code == 0, result.exception
+
+    def test_a_second_value_is_a_usage_error(self):
+        """Not a traceback from inside numpy's broadcasting, which is what a
+        list-typed option gave for every count the clipper could not use."""
+        result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", "--sigma-clip", "5", "3", "--output-prefix", str(self.tmpdir / "out"))
+
+        assert result.exit_code == 2, result.output
+
+    def test_automask_per_iter_is_gone(self):
+        assert "--automask-per-iter" not in CliRunner().invoke(im_command, ["--help"]).output
+
+    def test_the_automask_changes_the_fit(self):
+        """Guards the acceptance test above: an option that parsed but did not
+        reach `get_automask` would still exit 0.
+
+        The cube carries a one-channel line, so clipping it out of the fit has
+        to move the continuum model.
+        """
+        masked, unmasked = self.tmpdir / "masked", self.tmpdir / "unmasked"
+
+        for prefix, extra in ((masked, ("--sigma-clip", "3")), (unmasked, ())):
+            result = self._im("--fit-model", "scipy-median-filter", "--vel-width", "15", *extra, "--output-prefix", str(prefix))
+            assert result.exit_code == 0, (prefix, result.exception)
+
+        with fitsio.open(f"{masked}-cont.fits") as a, fitsio.open(f"{unmasked}-cont.fits") as b:
+            assert not np.array_equal(a[0].data, b[0].data)
