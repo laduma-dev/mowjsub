@@ -324,6 +324,19 @@ class FitMedFilterFast(FitFunc):
         else:
             data_filled = data
 
+        # scipy's rank filters accept only native byte order, and raise a bare
+        # `RuntimeError: Unsupported array type` on anything else -- naming
+        # neither the array nor the reason. FITS is big-endian by definition, so
+        # `zds_from_fits` hands back a `>f4` cube on every little-endian machine
+        # there is, and this fitter could not run in the image plane at all.
+        # Converted here, per spectrum, rather than over the cube at read time:
+        # this is the only consumer that cannot take the array as the file
+        # stores it, and byteswapping whole cubes for it would cost every other
+        # fitter a copy. `asarray` is a no-op when the order is already native,
+        # so the visibility plane (where dask-ms yields native arrays) is
+        # untouched.
+        data_filled = np.asarray(data_filled, dtype=data_filled.dtype.newbyteorder("="))
+
         # Use scipy.ndimage.median_filter for speed
         filtered = median_filter(data_filled, size=self.chanwidth, mode="reflect")
 

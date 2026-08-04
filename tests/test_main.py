@@ -83,6 +83,24 @@ class TestFitsFunc(unittest.TestCase):
 
         assert np.allclose(baseline_vel, baseline_chan, atol=1e-6)
 
+    def test_median_filter_fast_accepts_a_big_endian_spectrum(self):
+        """FITS is big-endian, and scipy's rank filters take only native order.
+
+        `zds_from_fits` hands back the cube in the order the file stores it, so
+        on every little-endian machine this fitter was given a `>f4` spectrum
+        and scipy raised a bare `RuntimeError: Unsupported array type`, naming
+        neither the array nor the reason. `--fit-model scipy-median-filter`
+        could therefore not run in the image plane at all. The visibility plane
+        never saw it: dask-ms yields native arrays.
+        """
+        big_endian = self.data.astype(self.data.dtype.newbyteorder(">"))
+        assert not big_endian.dtype.isnative, "this test needs a non-native array to be about anything"
+
+        baseline_native = FitMedFilterFast(self.freqs, velwidth=self.velwidth).fit(self.data, mask=self.mask, weights=None)
+        baseline_big = FitMedFilterFast(self.freqs, velwidth=self.velwidth).fit(big_endian, mask=self.mask, weights=None)
+
+        np.testing.assert_allclose(baseline_big, baseline_native)
+
     def test_polynomial(self):
         baseline_func = FitPolynomial(self.freqs, order=3)
         baseline = baseline_func.fit(self.data, mask=self.mask, weights=None)
