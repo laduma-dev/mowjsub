@@ -321,4 +321,4 @@ def im_mowjsub(
 #: generically without knowing the function's own name.
 step = im_mowjsub
 
-command = make_command(im_mowjsub, positional="input_image")
+command = make_command(im_mowjsub, positional="input_image", must_exist=("input_image", "mask_image"))

@@ -396,6 +396,67 @@ class TestZdsFromFits(unittest.TestCase):
         assert zds.attrs["header"]["RESTFREQ"] == 1420.40575 * 1e6
 
 
+class TestRequireDistinctMs(unittest.TestCase):
+    """`--output-ms` naming the MS being read.
+
+    `output_ms_dataset` builds a fresh dataset from the input's row metadata and
+    `xds_to_table` writes it, so the input would be overwritten while the fit was
+    still reading from it -- and with a Doppler correction the channel count
+    differs too, so re-running could not recover it. dask-ms writes what it is
+    given and says nothing.
+
+    Pure path arithmetic, so none of this needs an MS on disk.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.ms = self.tmpdir / "input.ms"
+        self.ms.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_a_distinct_output_is_allowed(self):
+        utils.require_distinct_ms(self.ms, self.tmpdir / "output.ms")
+
+    def test_no_output_ms_is_allowed(self):
+        """vis-mowjsub without --output-ms writes a column back, which is its own path."""
+        utils.require_distinct_ms(self.ms, None)
+
+    def test_the_same_path_is_refused(self):
+        with self.assertRaises(RuntimeError) as raised:
+            utils.require_distinct_ms(self.ms, self.ms)
+
+        assert "is the MS being read" in str(raised.exception)
+
+    def test_a_trailing_slash_does_not_disguise_it(self):
+        with self.assertRaises(RuntimeError):
+            utils.require_distinct_ms(self.ms, f"{self.ms}/")
+
+    def test_a_relative_path_does_not_disguise_it(self):
+        cwd = os.getcwd()
+        os.chdir(self.tmpdir)
+        try:
+            with self.assertRaises(RuntimeError):
+                utils.require_distinct_ms("input.ms", "./input.ms")
+        finally:
+            os.chdir(cwd)
+
+    def test_a_symlink_does_not_disguise_it(self):
+        link = self.tmpdir / "link.ms"
+        link.symlink_to(self.ms)
+
+        with self.assertRaises(RuntimeError):
+            utils.require_distinct_ms(link, self.ms)
+
+    def test_an_output_that_does_not_exist_yet_still_compares(self):
+        """The usual case: the output is a path, not a directory, when this runs."""
+        utils.require_distinct_ms(self.ms, self.tmpdir / "not-created-yet.ms")
+
+        with self.assertRaises(RuntimeError):
+            utils.require_distinct_ms(self.tmpdir / "absent.ms", self.tmpdir / "absent.ms")
+
+
 class TestWriteCubes(unittest.TestCase):
     """Writing several cubes in one pass over the graph."""
 

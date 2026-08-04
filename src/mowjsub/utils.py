@@ -3,6 +3,7 @@ import logging
 import os
 import warnings
 from collections import namedtuple
+from pathlib import Path
 from typing import Dict
 
 import astropy.io.fits as fitsio
@@ -619,6 +620,39 @@ def require_topocentric(spw, spw_id, ms_path):
     raise RuntimeError(
         f"Spectral window {spw_id} of {ms_path} is already on a {found.upper()} grid, not a topocentric one. "
         f"Doppler-correcting it would apply the frame conversion twice. Use the MS as it came off the telescope."
+    )
+
+
+def require_distinct_ms(input_ms, output_ms):
+    """Refuse an ``--output-ms`` that is the MS being read.
+
+    ``output_ms_dataset`` builds a fresh dataset from the input's row metadata
+    and ``xds_to_table`` then writes it, so naming the input means writing an MS
+    on top of itself while it is still being read from. Where a Doppler
+    correction is involved the channel count differs too, and
+    ``copy_ms_subtables`` would copy every subtable onto itself. The input is
+    not recoverable afterwards, and nothing further down complains: dask-ms
+    writes what it is given.
+
+    Paths are compared resolved, so a trailing slash, a relative path or a
+    symlink cannot slip past.
+
+    Args:
+        input_ms (str|Path): MS being read.
+        output_ms (str|Path): MS the caller asked to write.
+
+    Raises:
+        RuntimeError: The two name the same MS.
+    """
+    if output_ms is None:
+        return
+
+    if Path(input_ms).resolve() != Path(output_ms).resolve():
+        return
+
+    raise RuntimeError(
+        f"--output-ms={output_ms} is the MS being read. Writing it would overwrite the input while the fit is still reading from it, "
+        f"and the original could not be recovered. Give --output-ms a new path, or drop it to write a column back into {input_ms}."
     )
 
 

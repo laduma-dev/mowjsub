@@ -54,6 +54,25 @@ project's former name, **contsub**.
 
 ### Fixed
 
+- **`--output-ms` naming the MS being read is refused.** `output_ms_dataset`
+  builds a fresh dataset from the input's row metadata and `xds_to_table` writes
+  it, so passing the input meant overwriting it while the fit was still reading
+  from it — and with `--doppler-frame` the channel count differs too, so even
+  re-running could not recover it. `copy_ms_subtables` would have copied every
+  subtable onto itself. dask-ms writes what it is given and said nothing. Both
+  `vis-mowjsub` and `doppler-mowjsub` now check, before either opens the MS.
+  Paths are compared resolved, so a trailing slash, a relative path or a symlink
+  cannot slip past.
+
+- **A missing input file is a usage error again, not a traceback.** scabha's
+  `must_exist: yes` went with the YAML schemas in the Stimela 3 port, and
+  nothing replaced it: a cube or MS that was not there surfaced as whatever the
+  reader raised part-way into the run — for a cube, a bare `FileNotFoundError`
+  from inside fitstoolz. `make_command` takes a `must_exist` argument now, the
+  scabha policy's equivalent, and all three commands declare their inputs
+  through it. A missing path is reported by click, naming the parameter, before
+  the step is dispatched.
+
 - **A cube whose spectral axis is a velocity or a wavelength is no longer read as
   though the numbers were Hz.** `spectral_frequencies` takes the channel grid
   from the low-level WCS, which returns each axis in *its own* SI unit. A `FREQ`

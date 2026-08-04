@@ -149,7 +149,11 @@ def im_mowjsub(
     return runit(SimpleNamespace(**locals()))
 ```
 
-The scabha equivalents map onto it directly: `dtype: File` → `Path`, `choices:` → a `Literal`, `required: yes` → `Field(...)`, `abbreviation:` → `json_schema_extra`, `policies.repeat` → a `list[...]` annotation. `policies.positional` is the one that is not a type: `parser/_cli.py:make_command(step, positional=...)` renders that field as a `click.Argument`, since shinobi's `build_options` only emits `--options`.
+The scabha equivalents map onto it directly: `dtype: File` → `Path`, `choices:` → a `Literal`, `required: yes` → `Field(...)`, `abbreviation:` → `json_schema_extra`, `policies.repeat` → a `list[...]` annotation. Two are **not** types, and so cannot live in the signature at all -- `Path` says what a value is, not where it sits on the command line or whether it is already there. Both are arguments to `parser/_cli.py:make_command`: `policies.positional` → `positional=`, which renders that field as a `click.Argument` since shinobi's `build_options` only emits `--options`; `must_exist: yes` → `must_exist=`, which swaps the field's type for `click.Path(exists=True)` so a missing input is a usage error naming the parameter rather than whatever the reader raises mid-run.
+
+Both are keyed by **field name**, so a rename silently stops them applying. `make_command` raises on a `must_exist` entry the model has no field for, and `tests/test_cli.py::TestMakeCommand` pins that -- the failure mode being guarded is the command continuing to work while the check quietly does nothing.
+
+`utils.require_distinct_ms` is the other guard around destructive I/O, alongside `require_topocentric`/`require_topocentric_cube`: `vis-mowjsub` and `doppler-mowjsub` both call it before opening anything, because `output_ms_dataset` plus `xds_to_table` would otherwise write the input MS on top of itself while the fit was still reading it. Compare paths resolved -- a trailing slash, a relative path and a symlink all name the same MS.
 
 Each module exposes three names: `runit(opts)` does the work against a namespace, `step` is the `StepRef` (so a Stimela 3 recipe can use it directly), and `command` is the `click.Command` the console script points at. **The console scripts point at `command`, not `runit`** — `runit` is a plain function now, so tests drive `command` through `CliRunner`.
 
