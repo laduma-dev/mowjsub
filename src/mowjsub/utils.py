@@ -41,7 +41,46 @@ warnings.filterwarnings("ignore", message=".*Consolidated metadata is currently 
 log = logging.getLogger(LOGGER)
 
 
-def get_automask(cube, fitfunc, sigma_clip):
+def cap_masked_fraction(mask, residual, max_fraction):
+    """Hold each sightline's masked fraction below a cap, keeping the strongest.
+
+    A deeper threshold can mask so much of a spectrum that the fit it was meant
+    to protect has nothing left to fit: past roughly half the band ``splrep``
+    returns garbage or raises, and the cube comes back NaN. Where a sightline is
+    over the cap, only the strongest detections are kept -- ranked by
+    ``|residual|``, which is the same quantity the threshold was applied to, so
+    this trims the marginal end rather than an arbitrary one.
+
+    Args:
+        mask (np.ndarray): Boolean ``(..., nchan)``, True where excluded.
+        residual (np.ndarray): The residual the mask was built from.
+        max_fraction (float): Largest masked fraction to allow per sightline.
+
+    Returns:
+        np.ndarray: The mask, with over-cap sightlines trimmed.
+    """
+    nchan = mask.shape[-1]
+    budget = int(np.floor(max_fraction * nchan))
+
+    counts = mask.sum(axis=-1)
+    over = counts > budget
+    if not np.any(over):
+        return mask
+
+    trimmed = mask.copy()
+    strength = np.where(mask, np.abs(residual), -np.inf)
+    # Rank each over-cap sightline's detections and keep the top `budget`.
+    for idx in zip(*np.nonzero(over)):
+        keep = np.argsort(strength[idx])[-budget:] if budget > 0 else []
+        row = np.zeros(nchan, dtype=bool)
+        row[keep] = True
+        trimmed[idx] = row
+
+    log.warning(f"{over.sum()} sightlines exceeded --max-masked-fraction ({max_fraction:.2f}); kept their strongest {budget} of {nchan} channels")
+    return trimmed
+
+
+def get_automask(cube, fitfunc, sigma_clip, source_footprint=None, source_sigma_clip=None, max_masked_fraction=None):
     """Generate a binary mask by sigma-thresholding the input cube.
 
     An unmasked continuum is fitted first and the *residual* is what gets
@@ -49,10 +88,27 @@ def get_automask(cube, fitfunc, sigma_clip):
     mask made by a source finder run over the same cube, which would find the
     continuum sources in every channel.
 
+    Where a source footprint is given, the mask is a *union*: the ordinary clip
+    everywhere, plus a deeper one over the catalogued sightlines. The deeper
+    threshold is affordable there because absorption cannot occur without a
+    background source, so those sightlines are the only place it can be, and the
+    search volume -- and with it the number of trials the threshold has to
+    survive -- collapses from the whole cube to the footprint. It is a union and
+    not a substitution: the blind clip still runs over the footprint too, and
+    replacing it measurably loses, because a profile-weighted detector
+    concentrates continuum *fit* error exactly where the source is brightest.
+
     Args:
         cube (Array): Data cube.
         fitfunc (FitFunc): Fitter used for that first, unmasked continuum.
         sigma_clip (float): Sigma clip level.
+        source_footprint (np.ndarray|None): Boolean ``(nra, ndec)``, True on a
+            catalogued sightline. ``None`` disables the deeper threshold.
+        source_sigma_clip (float|None): Clip level used inside the footprint.
+            Defaults to ``sigma_clip`` when omitted, which makes the footprint
+            inert rather than silently changing the threshold.
+        max_masked_fraction (float|None): Per-sightline cap, see
+            :func:`cap_masked_fraction`. ``None`` disables the cap.
 
     Returns:
         Array: Binary mask, ``True`` where a channel is excluded from the fit --
@@ -64,13 +120,22 @@ def get_automask(cube, fitfunc, sigma_clip):
     log.info("Creating binary mask as requested")
     contsub = ContSub(fitfunc)
     cont_model = contsub.fitContinuum(cube, mask=None)
+    residual = cube - cont_model
 
-    clip = PixSigmaClip(sigma_clip)
+    mask = ~Mask(PixSigmaClip(sigma_clip)).getMask(residual)
 
-    mask = Mask(clip).getMask(cube - cont_model)
+    if source_footprint is not None and source_sigma_clip is not None and source_sigma_clip != sigma_clip:
+        if source_footprint.shape != cube.shape[:2]:
+            raise ValueError(f"Source footprint is {source_footprint.shape}, but this cube chunk is {cube.shape[:2]} on the sky axes.")
+        deep = ~Mask(PixSigmaClip(source_sigma_clip)).getMask(residual)
+        mask = mask | (deep & source_footprint[..., np.newaxis])
+
+    if max_masked_fraction is not None:
+        mask = cap_masked_fraction(mask, residual, max_masked_fraction)
+
     log.info("Mask created sucessfully")
 
-    return ~mask
+    return mask
 
 
 def chans_in_velwidth(freqs: np.ndarray, velwidth: float):
