@@ -152,6 +152,12 @@ class TestAutomaskUnion(unittest.TestCase):
 
         f = FitBSpline(self.freqs, order=3, chanwidth=16, fit_tol=0, seed=7)
         f.prepare()
+        # min_island is exercised by TestIslandCut. Disabled here so these test
+        # the union alone: this cube is 3x3 with no beam, so a real feature
+        # cannot span sightlines the way it does under a PSF, and a marginal
+        # detection is legitimately one voxel.
+        kw.setdefault("min_channels", 1)
+        kw.setdefault("source_min_channels", 1)
         return get_automask(self.cube, f, 3.0, **kw)
 
     def test_the_footprint_only_ever_adds(self):
@@ -188,6 +194,115 @@ class TestAutomaskUnion(unittest.TestCase):
         capped = self._mask(source_footprint=fp, source_sigma_clip=0.5, max_masked_fraction=0.25)
 
         assert capped.sum(axis=-1).max() <= int(0.25 * self.nchan)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestComponentFilter(unittest.TestCase):
+    """The two-axis cut that makes the growth discriminate signal from noise."""
+
+    def _clip(self, data, n=3.0, **kw):
+        from mowjsub.masking import Mask, PixSigmaClip
+
+        return ~Mask(PixSigmaClip(n, **kw)).getMask(data)
+
+    def test_a_spectrally_thin_detection_is_dropped(self):
+        """Beam-correlated noise is extended on the sky but one channel deep."""
+        data = np.random.default_rng(1).normal(0, 1, (9, 9, 201))
+        data[3:7, 3:7, 100] = 8.0  # four beams wide, one channel deep
+
+        assert self._clip(data, min_channels=1)[5, 5, 100], "detected with no cut"
+        assert not self._clip(data, min_channels=2)[5, 5, 100], "and dropped once 2 channels are required"
+
+    def test_a_spatially_small_detection_is_dropped(self):
+        data = np.random.default_rng(2).normal(0, 1, (9, 9, 201))
+        data[4, 4, 98:103] = 8.0  # one sightline, five channels deep
+
+        assert self._clip(data, min_channels=2)[4, 4, 100], "passes the spectral cut"
+        assert not self._clip(data, min_channels=2, sky_element=np.ones((2, 2), bool))[4, 4, 100], "but not the sky cut"
+
+    def test_a_detection_extended_on_both_axes_survives_and_is_grown(self):
+        data = np.random.default_rng(3).normal(0, 1, (9, 9, 201))
+        data[3:7, 3:7, 98:103] = 8.0
+
+        cut = self._clip(data, min_channels=2, sky_element=np.ones((2, 2), bool))
+
+        assert cut[3:7, 3:7, 98:103].all(), "the component survives"
+        assert cut[4, 4, 97] and cut[4, 4, 103], "and the growth still reaches its wings"
+
+    def test_defaults_leave_the_mask_untouched(self):
+        data = np.random.default_rng(4).normal(0, 1, (8, 8, 96))
+
+        np.testing.assert_array_equal(self._clip(data), self._clip(data, min_channels=1, sky_element=None))
+
+    def test_the_cut_removes_most_beam_correlated_noise(self):
+        from scipy import ndimage
+
+        rng = np.random.default_rng(5)
+        noise = ndimage.gaussian_filter(rng.normal(0, 1, (48, 48, 192)), sigma=(1.7, 1.7, 0), mode="wrap")
+        noise /= noise.std()
+
+        before = self._clip(noise).mean()
+        after = self._clip(noise, min_channels=2, sky_element=np.ones((2, 2), bool)).mean()
+
+        assert before > 0.05, f"beam-correlated noise loses {before:.1%} of the band with no cut"
+        assert after < before / 4, f"and {after:.1%} with one"
+
+
+class TestBeamElement(unittest.TestCase):
+    def _hdr(self, bmaj=4e-3, bmin=4e-3, cdelt=1e-3):
+        hdr = _header(cdelt=cdelt)
+        hdr["BMAJ"], hdr["BMIN"] = bmaj, bmin
+        return hdr
+
+    def test_a_round_beam_gives_a_round_element(self):
+        from mowjsub.sources import beam_element
+
+        element = beam_element(self._hdr(), 1.0)
+        # A 4x4 pixel beam: the element is about pi * 2 * 2 = 12.6 pixels.
+        assert 9 <= element.sum() <= 16, element.sum()
+        assert element.shape[0] == element.shape[1]
+
+    def test_a_smaller_fraction_gives_a_smaller_element(self):
+        from mowjsub.sources import beam_element
+
+        assert beam_element(self._hdr(), 0.5).sum() < beam_element(self._hdr(), 1.0).sum()
+
+    def test_a_tiny_fraction_still_selects_something(self):
+        from mowjsub.sources import beam_element
+
+        assert beam_element(self._hdr(), 0.01).sum() >= 1, "rounding up must never reach an empty element"
+
+    def test_zero_disables_it(self):
+        from mowjsub.sources import beam_element
+
+        assert beam_element(self._hdr(), 0.0) is None
+
+    def test_an_elongated_beam_is_oriented_by_bpa(self):
+        from mowjsub.sources import beam_element
+
+        hdr = self._hdr(bmaj=8e-3, bmin=2e-3)
+        hdr["BPA"] = 0.0  # major axis along +Dec, i.e. the y/dec pixel axis
+        along_dec = beam_element(hdr, 1.0)
+        hdr["BPA"] = 90.0  # major axis along East, i.e. the x/ra pixel axis
+        along_ra = beam_element(hdr, 1.0)
+
+        # Same area either way, but the long axis swaps between the two.
+        assert abs(int(along_dec.sum()) - int(along_ra.sum())) <= 2
+        dec_extent = along_dec.any(axis=0).sum(), along_dec.any(axis=1).sum()
+        ra_extent = along_ra.any(axis=0).sum(), along_ra.any(axis=1).sum()
+        assert dec_extent[0] > dec_extent[1], f"BPA 0 should be long in dec, got {dec_extent}"
+        assert ra_extent[1] > ra_extent[0], f"BPA 90 should be long in ra, got {ra_extent}"
+
+    def test_a_header_with_no_beam_says_so(self):
+        from mowjsub.sources import beam_element
+
+        with self.assertRaises(RuntimeError) as raised:
+            beam_element(_header(), 0.5)
+
+        assert "BMAJ" in str(raised.exception)
 
 
 if __name__ == "__main__":

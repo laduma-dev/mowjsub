@@ -80,7 +80,18 @@ def cap_masked_fraction(mask, residual, max_fraction):
     return trimmed
 
 
-def get_automask(cube, fitfunc, sigma_clip, source_footprint=None, source_sigma_clip=None, max_masked_fraction=None):
+def get_automask(
+    cube,
+    fitfunc,
+    sigma_clip,
+    source_footprint=None,
+    source_sigma_clip=None,
+    max_masked_fraction=None,
+    min_channels=1,
+    sky_element=None,
+    source_min_channels=None,
+    source_sky_element=None,
+):
     """Generate a binary mask by sigma-thresholding the input cube.
 
     An unmasked continuum is fitted first and the *residual* is what gets
@@ -109,6 +120,18 @@ def get_automask(cube, fitfunc, sigma_clip, source_footprint=None, source_sigma_
             inert rather than silently changing the threshold.
         max_masked_fraction (float|None): Per-sightline cap, see
             :func:`cap_masked_fraction`. ``None`` disables the cap.
+        min_channels (int): Spectral extent a detection component must span
+            for the blind clip; see :class:`~mowjsub.masking.PixSigmaClip`.
+        sky_element (np.ndarray|None): Beam-shaped element a component's sky
+            projection must contain, already resolved from beams by
+            :func:`~mowjsub.sources.beam_element`.
+        source_min_channels (int|None): The same, for the deeper clip inside the
+            footprint. Defaults to ``min_channels``. Worth setting higher: a
+            lower threshold produces far more noise components for the growth to
+            inflate, and without any cut 2 sigma excluded 96.9% of the band and
+            the fit returned NaN.
+        source_sky_element (np.ndarray|None): Likewise, defaulting to
+            ``sky_element``.
 
     Returns:
         Array: Binary mask, ``True`` where a channel is excluded from the fit --
@@ -122,12 +145,18 @@ def get_automask(cube, fitfunc, sigma_clip, source_footprint=None, source_sigma_
     cont_model = contsub.fitContinuum(cube, mask=None)
     residual = cube - cont_model
 
-    mask = ~Mask(PixSigmaClip(sigma_clip)).getMask(residual)
+    mask = ~Mask(PixSigmaClip(sigma_clip, min_channels=min_channels, sky_element=sky_element)).getMask(residual)
 
     if source_footprint is not None and source_sigma_clip is not None and source_sigma_clip != sigma_clip:
         if source_footprint.shape != cube.shape[:2]:
             raise ValueError(f"Source footprint is {source_footprint.shape}, but this cube chunk is {cube.shape[:2]} on the sky axes.")
-        deep = ~Mask(PixSigmaClip(source_sigma_clip)).getMask(residual)
+        deep = ~Mask(
+            PixSigmaClip(
+                source_sigma_clip,
+                min_channels=min_channels if source_min_channels is None else source_min_channels,
+                sky_element=sky_element if source_sky_element is None else source_sky_element,
+            )
+        ).getMask(residual)
         mask = mask | (deep & source_footprint[..., np.newaxis])
 
     if max_masked_fraction is not None:

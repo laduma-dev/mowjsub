@@ -107,7 +107,6 @@ def footprint_from_catalogue(header, ra_deg, dec_deg, maj_deg=None, radius_pix=N
         shape = (int(header["NAXIS1"]), int(header["NAXIS2"]))
     nra, ndec = shape
 
-    radius_pix = 3.0 if radius_pix is None else float(radius_pix)
     # Degrees per pixel, from the WCS rather than CDELT so a CD/PC matrix works.
     # `wcs.utils`' function returns degrees as an array; the WCS *method* of the
     # same name returns a list of Quantities, which is not what this wants.
@@ -120,18 +119,41 @@ def footprint_from_catalogue(header, ra_deg, dec_deg, maj_deg=None, radius_pix=N
     maj_deg = np.asarray(maj_deg, float)
 
     # A catalogued major axis is a FWHM; take the footprint out to that radius.
-    radii = np.where(np.isfinite(maj_deg) & (maj_deg > 0), maj_deg / scale, radius_pix)
+    # NaN means the catalogue stated no extent, and stays NaN so the fallback
+    # below can tell that apart from a stated one.
+    radii = np.where(np.isfinite(maj_deg) & (maj_deg > 0), maj_deg / scale, np.nan)
+
+    # An unresolved source still covers the restoring beam, so where the
+    # catalogue gives no extent the footprint is the beam itself -- shape and
+    # orientation included, since a disc of the same area points the wrong way
+    # on any elongated beam. An explicit --source-radius overrides that, and a
+    # cube with no beam at all falls back to a circle of 3 pixels.
+    try:
+        beam_a, beam_b, beam_theta = beam_pixel_ellipse(header)
+    except RuntimeError:
+        beam_a = beam_b = 3.0
+        beam_theta = 0.0
+    if radius_pix is not None:
+        beam_a = beam_b = float(radius_pix)
+        beam_theta = 0.0
 
     footprint = np.zeros((nra, ndec), dtype=bool)
-    grid_x, grid_y = np.mgrid[0:nra, 0:ndec]
     inside = 0
     for xi, yi, ri in zip(np.atleast_1d(x), np.atleast_1d(y), np.atleast_1d(radii)):
         if not (np.isfinite(xi) and np.isfinite(yi)):
             continue
-        ri = max(float(ri), 1.0)
-        if xi < -ri or yi < -ri or xi > nra + ri or yi > ndec + ri:
+        if np.isfinite(ri) and ri > 0:
+            # A catalogued extent is a major axis; keep the beam's axis ratio
+            # and orientation, which is the shape the source is smeared by.
+            semi_major = max(float(ri), beam_a)
+            semi_minor = semi_major * (beam_b / beam_a if beam_a else 1.0)
+        else:
+            semi_major, semi_minor = beam_a, beam_b
+
+        reach = max(semi_major, semi_minor)
+        if xi < -reach or yi < -reach or xi > nra + reach or yi > ndec + reach:
             continue  # outside the image
-        footprint |= ((grid_x - xi) ** 2 + (grid_y - yi) ** 2) <= ri**2
+        footprint |= ellipse_mask((nra, ndec), xi, yi, semi_major, semi_minor, beam_theta)
         inside += 1
 
     log.info(f"Source footprint: {inside} of {np.size(ra_deg)} catalogued sources fall in the image, covering {footprint.mean() * 100:.2f}% of it")
@@ -151,3 +173,103 @@ def footprint_from_mask(path, shape):
     if data.shape != tuple(shape):
         raise ValueError(f"{path} is {data.shape} after transposing to (ra, dec), but the cube is {tuple(shape)}.")
     return data.astype(bool)
+
+
+def beam_pixel_ellipse(header):
+    """The restoring beam as a pixel-space ellipse.
+
+    Returns semi-axes in pixels and the position angle rotated into *pixel*
+    coordinates. ``BPA`` is measured North through East, which is not the pixel
+    frame: with the usual negative ``CDELT1``, East runs towards *decreasing* x,
+    so the major axis at position angle ``t`` points along ``(-sin t, cos t)``.
+    A cube with a positive ``CDELT1`` flips that, and the sign is taken from the
+    WCS rather than assumed -- an unnoticed sign here mirrors every ellipse
+    about the Dec axis, which is invisible on a round beam and wrong on any
+    other.
+
+    Args:
+        header: FITS header with ``BMAJ``/``BMIN`` in degrees, optionally
+            ``BPA`` in degrees, and a celestial WCS.
+
+    Returns:
+        tuple: ``(semi_major_pix, semi_minor_pix, theta_pix_radians)``.
+
+    Raises:
+        RuntimeError: If the header states no beam.
+    """
+    bmaj, bmin = header.get("BMAJ"), header.get("BMIN")
+    if not bmaj:
+        raise RuntimeError(
+            "A sky-extent cut in beams needs BMAJ (and BMIN, BPA) in the header, and this cube states none. Set the beam on the cube, or leave --min-sky-beams at 0."
+        )
+    bmin = bmin or bmaj
+    bpa = float(header.get("BPA") or 0.0)
+
+    wcs = WCS(header).celestial
+    scale = float(np.mean(np.abs(proj_plane_pixel_scales(wcs))))
+
+    # Does x increase with RA or against it?
+    cdelt = wcs.wcs.cdelt[0] if wcs.wcs.has_cd() is False else wcs.wcs.cd[0, 0]
+    east_is_minus_x = cdelt < 0
+
+    theta = np.deg2rad(bpa)
+    if not east_is_minus_x:
+        theta = -theta
+
+    return float(bmaj) / scale / 2.0, float(bmin) / scale / 2.0, theta
+
+
+def ellipse_mask(shape, x0, y0, semi_major, semi_minor, theta):
+    """Boolean ``(nx, ny)`` marking an ellipse, in pixel coordinates.
+
+    ``theta`` is the major-axis angle already rotated into the pixel frame by
+    :func:`beam_pixel_ellipse`, so the major axis points along
+    ``(-sin theta, cos theta)``.
+    """
+    nx, ny = shape
+    gx, gy = np.mgrid[0:nx, 0:ny]
+    dx, dy = gx - x0, gy - y0
+
+    # Project onto the major and minor axes.
+    along = -dx * np.sin(theta) + dy * np.cos(theta)
+    across = -dx * np.cos(theta) - dy * np.sin(theta)
+
+    return (along / max(semi_major, 0.5)) ** 2 + (across / max(semi_minor, 0.5)) ** 2 <= 1.0
+
+
+def beam_element(header, beams):
+    """A beam-shaped structuring element ``beams`` across, for the sky cut.
+
+    Testing sky extent by *area* is orientation-blind: an elongated streak with
+    as many pixels as a beam passes a count it should not. Eroding a component's
+    sky projection by this element instead asks whether it actually contains a
+    beam-shaped region, which is the thing that makes a detection credible --
+    nothing on the sky is smaller than the beam.
+
+    ``beams`` is a linear size in beam major axes, so 0.5 is half a beam across.
+    Both semi-axes are scaled by it and each is rounded **up** to at least half
+    a pixel, so any positive request selects a non-empty element.
+
+    Args:
+        header: FITS header carrying the beam.
+        beams (float): Linear extent in beam major axes. ``0`` disables.
+
+    Returns:
+        np.ndarray|None: Boolean structuring element, or None when disabled.
+    """
+    if not beams:
+        return None
+
+    semi_major, semi_minor, theta = beam_pixel_ellipse(header)
+    a, b = semi_major * beams, semi_minor * beams
+
+    # Big enough to hold the ellipse at any orientation.
+    half = int(np.ceil(max(a, b)))
+    size = 2 * half + 1
+    element = ellipse_mask((size, size), half, half, a, b, theta)
+
+    log.info(
+        f"Sky-extent cut: {beams} x BMAJ is a {element.sum()}-pixel beam-shaped element "
+        f"(beam {2 * semi_major:.1f} x {2 * semi_minor:.1f} pixels at BPA {np.rad2deg(theta):.1f} deg in pixel frame)"
+    )
+    return element

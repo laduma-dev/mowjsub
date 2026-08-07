@@ -21,7 +21,7 @@ from mowjsub.fitfuncs import (
 )
 from mowjsub.image_plane import ContSub
 from mowjsub.parser._cli import make_command
-from mowjsub.sources import footprint_from_catalogue, footprint_from_mask, read_catalogue
+from mowjsub.sources import beam_element, footprint_from_catalogue, footprint_from_mask, read_catalogue
 from mowjsub.utils import (
     apply_cube_doppler,
     get_automask,
@@ -38,12 +38,25 @@ INTERPOLATIONS = Literal["nearest", "linear"]
 LOG_LEVELS = Literal["info", "debug", "trace", "error", "critical"]
 
 
-def _automask_block(data, spec, seed, sigma_clip, source_footprint=None, source_sigma_clip=None, max_masked_fraction=None):
+def _automask_block(
+    data,
+    spec,
+    seed,
+    sigma_clip,
+    source_footprint=None,
+    source_sigma_clip=None,
+    max_masked_fraction=None,
+    min_channels=1,
+    sky_element=None,
+    source_min_channels=None,
+    source_sky_element=None,
+):
     """Build the automask for one chunk, on a fitter of the chunk's own.
 
     ``source_footprint`` is this chunk's slice of the sky footprint, already cut
     to the block's RA extent by the caller -- chunking is along RA only, so the
-    slice is exact and no overlap between chunks is needed.
+    slice is exact and no overlap between chunks is needed. ``sky_element``
+    arrives already resolved from beams, since a task cannot see the header.
     """
     return get_automask(
         data,
@@ -52,6 +65,10 @@ def _automask_block(data, spec, seed, sigma_clip, source_footprint=None, source_
         source_footprint=source_footprint,
         source_sigma_clip=source_sigma_clip,
         max_masked_fraction=max_masked_fraction,
+        min_channels=min_channels,
+        sky_element=sky_element,
+        source_min_channels=source_min_channels,
+        source_sky_element=source_sky_element,
     )
 
 
@@ -214,6 +231,11 @@ def runit(opts):
     fit_seeds = [int(seed) for seed in seeds[nblocks:]]
 
     footprint = _resolve_footprint(opts, cube, zds.attrs["header"], log)
+
+    # Resolved here, not in the task: the sky-extent cut is stated in beams and
+    # only the header knows how many pixels that is.
+    sky_element = beam_element(zds.attrs["header"], opts.min_sky_beams)
+    source_sky_element = sky_element if opts.source_min_sky_beams is None else beam_element(zds.attrs["header"], opts.source_min_sky_beams)
     # Chunking is along RA only, so each block's slice of the sky footprint is
     # exactly the rows that block holds -- no overlap between chunks is needed,
     # unlike a spatial filter, which is one reason to prefer a per-sightline
@@ -232,6 +254,10 @@ def runit(opts):
                     source_footprint=block_footprint,
                     source_sigma_clip=opts.source_sigma_clip,
                     max_masked_fraction=opts.max_masked_fraction,
+                    min_channels=opts.min_channels,
+                    sky_element=sky_element,
+                    source_min_channels=opts.source_min_channels,
+                    source_sky_element=source_sky_element,
                 ),
                 signature=f"({dims_string}) -> ({dims_string})",
                 meta=(np.ndarray((), cube.dtype),),
@@ -350,6 +376,47 @@ def im_mowjsub(
     source_radius: float | None = Field(
         None,
         description="Footprint radius in pixels for catalogue entries carrying no major axis. Defaults to 3. A source's own catalogued extent is used where there is one.",
+    ),
+    min_channels: int = Field(
+        1,
+        description=(
+            "Channels a detection must span to survive into the automatic mask. Detections are grown by two 18-neighbour passes to "
+            "catch the line wings that sit below any threshold their peak clears -- worth up to 22 points of recovered line flux -- "
+            "but the growth reaches noise as readily as signal. A cube's noise is correlated across the beam and independent "
+            "between channels, so noise components are spatially extended but spectrally thin: measured on beam-correlated noise "
+            "they span a median of 1 channel and never more than 2, while a 3-sigma resolved line spans 3. This is the axis that "
+            "separates them, which a voxel count cannot, since both occupy about a beam: at 3 sigma the cut takes the excluded "
+            "fraction of a beam-correlated noise residual from 8.11% to 0.14%. "
+            "IT IS AN ENABLER FOR A LOWER THRESHOLD, NOT A FREE IMPROVEMENT. A feature only just clearing the threshold crosses it "
+            "in one or two channels, so the cut removes it along with the noise -- on a synthetic 3-sigma absorber, --min-channels 2 "
+            "at --sigma-clip 3 alone recovered 68% of the depth where no cut recovered 87%. Paired with a deeper threshold that "
+            "gives a real feature the extent to survive, the same cube went to 102%. So use it with --source-sigma-clip, or with a "
+            "--sigma-clip you have lowered deliberately. 1, the default, leaves the mask as it has always behaved."
+        ),
+    ),
+    min_sky_beams: float = Field(
+        0.0,
+        description=(
+            "Sky extent a detection must cover, as a linear size in beam major axes -- so 0.5 means half a beam across. Fractions "
+            "are allowed and the element is rounded UP, so any positive value still selects something. The test is whether the "
+            "detection CONTAINS a region of that shape, not whether it has that many pixels: a count is orientation-blind and "
+            "would pass an elongated streak with a beam's worth of pixels in it. All three of BMAJ, BMIN and BPA are used, so "
+            "the element is an ellipse carrying the beam's axis ratio and position angle. Stated in beams rather than pixels "
+            "because a pixel means something different on every cube, while the beam is the scale below which nothing on the "
+            "sky can be real. Needs a beam in the header. 0 disables it."
+        ),
+    ),
+    source_min_channels: int | None = Field(
+        None,
+        description=(
+            "--min-channels for the deeper --source-sigma-clip inside the source footprint. Defaults to --min-channels. Worth "
+            "setting higher: a lower threshold produces far more noise components for the growth to inflate, and with no cut at "
+            "all 2 sigma excluded 96.9% of the band and the fit returned NaN."
+        ),
+    ),
+    source_min_sky_beams: float | None = Field(
+        None,
+        description="--min-sky-beams for the deeper clip inside the source footprint. Defaults to --min-sky-beams.",
     ),
     max_masked_fraction: float | None = Field(
         None,
