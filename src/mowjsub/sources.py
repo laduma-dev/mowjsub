@@ -58,28 +58,85 @@ def read_catalogue(path):
 
     try:
         table = Table.read(path)
-    except Exception:  # not a format astropy recognises -- try a plain list
+        columns = list(table.colnames)
+
+        def pick(names):
+            for name in names:
+                if name in columns:
+                    return np.asarray(table[name], dtype=float)
+            return None
+    except Exception:
+        # Not a format astropy recognises. PyBDSF's own ASCII outputs name their
+        # columns in a comment line -- a bare list for `.srl`, a `#format:` line
+        # for the sky model -- and those are what a pipeline hands us, so read
+        # the names from there rather than making the caller convert.
+        names = _column_names(path)
+        if names:
+            columns = names
+
+            def index_of(wanted):
+                for name in wanted:
+                    if name in columns:
+                        return columns.index(name)
+                return None
+
+            ra_at, dec_at, maj_at = (index_of(n) for n in (_RA_NAMES, _DEC_NAMES, _MAJ_NAMES))
+            if ra_at is None or dec_at is None:
+                raise ValueError(f"{path} has columns {columns}; none of {_RA_NAMES} and {_DEC_NAMES} to read a position from.") from None
+
+            # Only the columns we need. A PyBDSF source list ends with a
+            # non-numeric S_Code, so reading every column fails outright.
+            wanted = [ra_at, dec_at] + ([maj_at] if maj_at is not None else [])
+            rows = np.atleast_2d(np.loadtxt(str(path), comments="#", ndmin=2, usecols=wanted))
+            maj = rows[:, 2] if maj_at is not None else np.full(rows.shape[0], np.nan)
+            return _wrap_ra(rows[:, 0]), rows[:, 1], maj
+
+        # A hand-written list: 'ra dec [maj_deg]', by position.
         rows = np.atleast_2d(np.loadtxt(str(path), comments="#", ndmin=2))
         if rows.shape[1] < 2:
             raise ValueError(f"{path} has fewer than two columns; expected at least 'ra dec' in degrees.") from None
         maj = rows[:, 2] if rows.shape[1] > 2 else np.full(rows.shape[0], np.nan)
-        return rows[:, 0], rows[:, 1], maj
-
-    def pick(names):
-        for name in names:
-            if name in table.colnames:
-                return np.asarray(table[name], dtype=float)
-        return None
+        return _wrap_ra(rows[:, 0]), rows[:, 1], maj
 
     ra, dec = pick(_RA_NAMES), pick(_DEC_NAMES)
     if ra is None or dec is None:
-        raise ValueError(f"{path} has columns {list(table.colnames)}; none of {_RA_NAMES} and {_DEC_NAMES} to read a position from.")
+        raise ValueError(f"{path} has columns {columns}; none of {_RA_NAMES} and {_DEC_NAMES} to read a position from.")
 
     maj = pick(_MAJ_NAMES)
     if maj is None:
         maj = np.full(ra.size, np.nan)
 
-    return ra, dec, maj
+    return _wrap_ra(ra), dec, maj
+
+
+def _wrap_ra(ra):
+    """Right ascension into [0, 360). PyBDSF writes some of it negative."""
+    return np.asarray(ra, dtype=float) % 360.0
+
+
+def _column_names(path):
+    """Column names from a comment header, for PyBDSF's ASCII outputs.
+
+    Its source list puts them on the last comment line before the data, and its
+    sky model on a ``#format:`` line. Returns None when no comment line looks
+    like a column header.
+    """
+    header = None
+    with open(path) as stream:
+        for raw in stream:
+            line = raw.strip()
+            if not line:
+                continue
+            if not line.startswith("#"):
+                break
+            tokens = line.lstrip("#").strip()
+            if tokens.lower().startswith("format:"):
+                tokens = tokens.split(":", 1)[1].strip()
+            fields = tokens.split()
+            # A header names a position; prose about the file does not.
+            if any(f in _RA_NAMES for f in fields) and any(f in _DEC_NAMES for f in fields):
+                header = fields
+    return header
 
 
 def footprint_from_catalogue(header, ra_deg, dec_deg, maj_deg=None, radius_pix=None, shape=None):
