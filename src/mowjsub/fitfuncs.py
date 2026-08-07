@@ -445,3 +445,59 @@ class FitDCT(FitFunc):
         dct_fit = fftpack.idct(dct_data, type=self.dct_type) * self.fnorm**2
 
         return dct_fit
+
+
+#: Which class each ``--fit-model`` names, and which constructor keywords that
+#: class actually takes. Kept as data, and kept here beside ``ORDER_MODELS`` and
+#: ``WIDTH_MODELS``, for the reason given above those two: both entry points
+#: build the same fitters from the same options, and the duplicated ``if/elif``
+#: chains they used to carry had already drifted apart once.
+#:
+#: The keyword tuples are what let :func:`build_fitfunc` construct any model
+#: from one plain dict, which in turn is what lets a dask task build its own
+#: fitter instead of closing over a shared one.
+FITTERS = {
+    "b-spline": (FitBSpline, ("order", "velwidth", "chanwidth")),
+    "spline": (FitBSpline, ("order", "velwidth", "chanwidth")),
+    "polynomial": (FitPolynomial, ("order",)),
+    "median-filter": (FitMedFilter, ("velwidth", "chanwidth")),
+    "scipy-median-filter": (FitMedFilterFast, ("velwidth", "chanwidth")),
+    "gcv-spline": (FitGCVSpline, ("fit_lam",)),
+}
+
+
+def build_fitfunc(spec, seed=None):
+    """Construct and ``prepare()`` a fitter from a plain, picklable spec.
+
+    ``spec`` is a dict carrying ``fit_model``, ``xspec``, ``fit_tol`` and
+    whatever of ``order``/``velwidth``/``chanwidth``/``gcv_lambda`` the model
+    needs; the surplus keys are ignored, so one spec serves every model.
+
+    This exists to be called *inside* a dask task. ``FitBSpline`` places its
+    knots at random offsets drawn from ``self.rng`` (see ``FitBSpline.fit``),
+    and both entry points used to build a single fitter and hand that same
+    object to every worker. A numpy ``Generator`` is explicitly not
+    thread-safe, and the schedulers run those workers as threads, so the
+    concurrent ``rng.integers`` calls were a genuine data race. Giving each
+    chunk its own instance and its own seed removes it.
+
+    Args:
+        spec (dict): Fitter configuration, as above.
+        seed: Seed for the instance's RNG. ``None`` draws fresh entropy.
+
+    Returns:
+        FitFunc: A prepared fitter.
+
+    Raises:
+        RuntimeError: If ``spec['fit_model']`` names no known model.
+    """
+    try:
+        cls, keys = FITTERS[spec["fit_model"]]
+    except KeyError:
+        raise RuntimeError(f"Unsupported fit-model: {spec['fit_model']!r}.") from None
+
+    kwargs = {key: spec["gcv_lambda"] if key == "fit_lam" else spec[key] for key in keys}
+    fitfunc = cls(spec["xspec"], fit_tol=spec["fit_tol"], seed=seed, **kwargs)
+    fitfunc.prepare()
+
+    return fitfunc

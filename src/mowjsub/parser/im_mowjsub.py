@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -16,11 +17,7 @@ from mowjsub import BIN, set_logger
 from mowjsub.fitfuncs import (
     ORDER_MODELS,
     WIDTH_MODELS,
-    FitBSpline,
-    FitGCVSpline,
-    FitMedFilter,
-    FitMedFilterFast,
-    FitPolynomial,
+    build_fitfunc,
 )
 from mowjsub.image_plane import ContSub
 from mowjsub.parser._cli import make_command
@@ -38,6 +35,16 @@ FIT_MODELS = Literal["b-spline", "spline", "polynomial", "median-filter", "scipy
 FRAMES = Literal["topo", "geo", "bary", "lsrk", "lsrd", "galacto", "lgroup", "cmb", "source"]
 INTERPOLATIONS = Literal["nearest", "linear"]
 LOG_LEVELS = Literal["info", "debug", "trace", "error", "critical"]
+
+
+def _automask_block(data, spec, seed, sigma_clip):
+    """Build the automask for one chunk, on a fitter of the chunk's own."""
+    return get_automask(data, build_fitfunc(spec, seed), sigma_clip)
+
+
+def _fit_block(data, mask, spec, seed):
+    """Fit the continuum of one chunk, on a fitter of the chunk's own."""
+    return ContSub(build_fitfunc(spec, seed), nomask=False).fitContinuum(data, mask)
 
 
 def runit(opts):
@@ -121,39 +128,53 @@ def runit(opts):
     dblocks = cube.data.blocks
     futures = []
 
-    if opts.fit_model in ["spline", "b-spline"]:
-        fitfunc = FitBSpline(xspec, order=opts.order, velwidth=velwidth, chanwidth=chanwidth, fit_tol=opts.cont_fit_tol)
-    elif opts.fit_model == "polynomial":
-        fitfunc = FitPolynomial(xspec, order=opts.order, fit_tol=opts.cont_fit_tol)
-    elif opts.fit_model == "median-filter":
-        fitfunc = FitMedFilter(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=opts.cont_fit_tol)
-    elif opts.fit_model == "scipy-median-filter":
-        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=opts.cont_fit_tol)
-    elif opts.fit_model == "gcv-spline":
-        fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=opts.cont_fit_tol)
-    else:
-        raise RuntimeError(f"Unsupported fit-model: {opts.fit_model!r}.")
-    fitfunc.prepare()
-
-    get_mask = da.gufunc(
-        lambda _data: get_automask(_data, fitfunc, opts.sigma_clip),
-        signature=f"({dims_string}) -> ({dims_string})",
-        meta=(np.ndarray((), cube.dtype),),
-        allow_rechunk=True,
+    spec = dict(
+        fit_model=opts.fit_model,
+        xspec=xspec,
+        order=opts.order,
+        velwidth=velwidth,
+        chanwidth=chanwidth,
+        fit_tol=opts.cont_fit_tol,
+        gcv_lambda=opts.gcv_lambda,
     )
+    # Validate the configuration once, here, rather than letting a bad
+    # combination surface from inside a worker once the cube is already being
+    # read. Discarded -- the fitters the tasks use are their own.
+    build_fitfunc(spec)
+
+    # One fitter per chunk, constructed inside the task. A single instance used
+    # to be shared by every worker, and `FitBSpline` draws its knot offsets from
+    # `self.rng` -- a numpy Generator, which is explicitly not thread-safe --
+    # while the scheduler below runs those workers as threads. Independent child
+    # seeds also stop the chunks drawing from one correlated stream.
+    #
+    # Two seeds per chunk, not one. The shared fitter served both passes, so the
+    # automask fit advanced the RNG and the final fit placed *different* knots.
+    # Giving both passes one seed would make them place the same knots, which is
+    # arguably more coherent, but it is a change in results (measured at 0.47
+    # sigma RMS, 2.9 sigma peak on a real cube) and does not belong in a fix
+    # that is otherwise result-preserving.
+    nblocks = cube.data.numblocks[0]
+    seeds = np.random.SeedSequence().generate_state(2 * nblocks)
+    mask_seeds = [int(seed) for seed in seeds[:nblocks]]
+    fit_seeds = [int(seed) for seed in seeds[nblocks:]]
 
     for biter, dblock in enumerate(dblocks):
         if opts.sigma_clip:
+            get_mask = da.gufunc(
+                partial(_automask_block, spec=spec, seed=mask_seeds[biter], sigma_clip=opts.sigma_clip),
+                signature=f"({dims_string}) -> ({dims_string})",
+                meta=(np.ndarray((), cube.dtype),),
+                allow_rechunk=True,
+            )
             mask_future = get_mask(dblock)
         elif nomask is False:
             mask_future = mask.data.blocks[biter]
         else:
             mask_future = da.zeros_like(dblock, dtype=bool)
 
-        contfit = ContSub(fitfunc, nomask=False)
-
         getfit = da.gufunc(
-            contfit.fitContinuum,
+            partial(_fit_block, spec=spec, seed=fit_seeds[biter]),
             signature=signature,
             meta=meta,
             allow_rechunk=True,
@@ -278,8 +299,15 @@ def im_mowjsub(
     hdu_index: int = Field(0, description="FITS primary HDU index", json_schema_extra={"abbreviation": "hi"}),
     ra_chunks: int = Field(64, description="Chunking along RA-axis. If set to zero, no Chunking is perfomed."),
     nworkers: int = Field(
-        4,
-        description=("Number of parallel worker threads (roughly one per CPU core). Runtime for fitting-bound models scales with this, so raise it to speed up large cubes."),
+        1,
+        description=(
+            "Number of parallel worker threads, one RA chunk each -- so it is also capped by the chunk count, 1440/--ra-chunks for "
+            "a typical cube. RAISING THIS USUALLY MAKES THE RUN SLOWER, which is why it defaults to 1. Dask runs these as threads, "
+            "and continuum fitting is a per-spectrum Python loop (ContSub.fitContinuum) around a scipy call, so the loop holds the "
+            "GIL and the workers contend for it rather than working in parallel. Measured on a 1440x1440x256 cube with the default "
+            "b-spline model, one fit pass took 4.3 min with a single worker and 26.5 min with 24. Raise it only for a model whose "
+            "per-spectrum work is dominated by a C routine that drops the GIL, and only after measuring."
+        ),
     ),
     loglevel: LOG_LEVELS = Field("info", description="Log level for the output"),
     doppler_frame: FRAMES | None = Field(
