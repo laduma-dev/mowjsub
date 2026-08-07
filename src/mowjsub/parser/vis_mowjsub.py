@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -18,11 +19,7 @@ from mowjsub import BIN, set_logger
 from mowjsub.fitfuncs import (
     ORDER_MODELS,
     WIDTH_MODELS,
-    FitBSpline,
-    FitGCVSpline,
-    FitMedFilter,
-    FitMedFilterFast,
-    FitPolynomial,
+    build_fitfunc,
 )
 from mowjsub.parser._cli import make_command
 from mowjsub.utils import (
@@ -41,6 +38,11 @@ app = BIN.vis_plane
 FIT_MODELS = Literal["b-spline", "spline", "polynomial", "median-filter", "scipy-median-filter", "gcv-spline"]
 FRAMES = Literal["topo", "geo", "bary", "lsrk", "lsrd", "galacto", "lgroup", "cmb", "source"]
 INTERPOLATIONS = Literal["nearest", "linear"]
+
+
+def _contsub_block(vis, flags, weights, spec, seed):
+    """Subtract the continuum from one chunk, on a fitter of the chunk's own."""
+    return VisContSub(build_fitfunc(spec, seed)).vis_cont_sub(vis, flags, weights)
 
 
 def runit(opts):
@@ -103,20 +105,19 @@ def runit(opts):
 
     futures = []
 
-    if method in ("spline", "b-spline"):
-        fitfunc = FitBSpline(xspec, order=order, velwidth=velwidth, chanwidth=chanwidth, fit_tol=cont_tol)
-    elif method == "polynomial":
-        fitfunc = FitPolynomial(xspec, order=order, fit_tol=cont_tol)
-    elif method == "median-filter":
-        fitfunc = FitMedFilter(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=cont_tol)
-    elif method == "scipy-median-filter":
-        fitfunc = FitMedFilterFast(xspec, velwidth=velwidth, chanwidth=chanwidth, fit_tol=cont_tol)
-    elif method == "gcv-spline":
-        fitfunc = FitGCVSpline(xspec, fit_lam=opts.gcv_lambda, fit_tol=cont_tol)
-    else:
-        raise ValueError(f"Unknown fitting method: {method}.")
-
-    fitfunc.prepare()
+    spec = dict(
+        fit_model=method,
+        xspec=xspec,
+        order=order,
+        velwidth=velwidth,
+        chanwidth=chanwidth,
+        fit_tol=cont_tol,
+        gcv_lambda=opts.gcv_lambda,
+    )
+    # Validate the configuration once, here, rather than letting a bad
+    # combination surface from inside a worker with the MS already being read.
+    # Discarded -- the fitters the tasks use are their own.
+    build_fitfunc(spec)
 
     base_dims = "TIME, BASELINE, FREQ, CORR"
     signature = f"({base_dims}),({base_dims}),({base_dims}) -> ({base_dims})"
@@ -124,17 +125,23 @@ def runit(opts):
 
     dask.config.set(scheduler="threads", num_workers=nworkers)
 
-    contfit = VisContSub(fitfunc)
-    get_cont = da.gufunc(
-        contfit.vis_cont_sub,
-        signature=signature,
-        meta=meta,
-        allow_rechunk=True,
-    )
+    # One fitter per chunk, constructed inside the task, for the reason given at
+    # the same place in the image plane: `FitBSpline` draws its knot offsets
+    # from `self.rng`, a numpy Generator is not thread-safe, and these tasks run
+    # as threads. One shared `VisContSub` used to serve every chunk.
+    nblocks = ds.VIS.data.numblocks[0]
+    seeds = [int(seed) for seed in np.random.SeedSequence().generate_state(nblocks)]
 
     for biter, dblock in enumerate(ds.VIS.data.blocks):
         flags = ds.FLAG.data.blocks[biter]
         weights = ds.WEIGHT.data.blocks[biter]
+
+        get_cont = da.gufunc(
+            partial(_contsub_block, spec=spec, seed=seeds[biter]),
+            signature=signature,
+            meta=meta,
+            allow_rechunk=True,
+        )
 
         futures.append(
             get_cont(
@@ -291,8 +298,15 @@ def vis_mowjsub(
         ),
     ),
     nworkers: int = Field(
-        4,
-        description=("Number of parallel worker threads (roughly one per CPU core). Runtime for fitting-bound models scales with this, so raise it to speed up large datasets."),
+        1,
+        description=(
+            "Number of parallel worker threads, one row chunk each. RAISING THIS USUALLY MAKES THE RUN SLOWER, which is why it "
+            "defaults to 1. Dask runs these as threads, and VisContSub.vis_cont_sub is a nested Python loop over time, baseline "
+            "and correlation around a scipy call, so the loop holds the GIL and the workers contend for it rather than working in "
+            "parallel. This follows the image plane on mechanism rather than on measurement -- the numbers are in --nworkers on "
+            "im-mowjsub, where the same loop shape was timed at 4.3 min against 26.5 min for 1 worker against 24. Raise it only "
+            "after measuring on your own data."
+        ),
     ),
     output_ms: Path | None = Field(None, description="If provided, write the output to a new MS with this name. Otherwise, add new column to the input MS."),
     load_from_cache: Path | None = Field(None, description="Load the MS from a cache (give Zarr file name) if available, otherwise create it."),
