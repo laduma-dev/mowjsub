@@ -3,7 +3,7 @@
 Notable changes to mowjsub. Versions before 2.0 were released under the
 project's former name, **contsub**.
 
-## Unreleased
+## 2.1.0 — 2026-10-16 (viper)
 
 - Build the standalone CLIs directly from typed signatures without importing
   Stimela. Install `mowjsub[ninja]` for lazily created genuine Stimela 3

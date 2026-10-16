@@ -9,6 +9,8 @@ permissions:
 
 jobs:
   deploy:
+    # Only version tags with the project's leading v publish packages.
+    if: startsWith(github.event.release.tag_name, 'v')
 
     runs-on: ubuntu-latest
 
