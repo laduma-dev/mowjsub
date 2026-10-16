@@ -1,32 +1,16 @@
-"""Build a `click.Command` from a `@shinobi.pystep` StepRef.
-
-Replaces scabha's `clickify_parameters` + YAML parser configs: the options are
-derived from the step's pydantic ``inputs_model`` by shinobi's ``build_options``
-(dtype, choices, abbreviations, bool and list handling), so a step's signature is
-the single schema authority. Modelled on fitstoolz's ``apps/_cli.py``, which in
-turn follows simms 3.0.
-
-Unlike fitstoolz, mowjsub's commands are standalone console scripts rather than
-subcommands of one group, so there is no root group to take ``--version`` or the
-log level from; both belong to the command itself.
-
-This module is also mowjsub's *application* layer, and so the one place that
-configures logging. The package itself only ever calls ``logging.getLogger``
-(see `mowjsub._package`), the same library/application split shinobi keeps --
-``shinobi.logsetup`` attaches shinobi's file handler from the CLI and nothing
-in the package touches a handler. ``set_logger`` used to live in mowjsub's
-package initializer and did both jobs at once.
-"""
+"""Native Click commands and optional Stimela adapters from typed signatures."""
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Iterable
 from pathlib import Path
+from types import UnionType
+from typing import Literal, Union, get_args, get_origin, get_type_hints
 
 import click
-from shinobi.clickutil import build_options, unflatten_kwargs
-from shinobi.steps.dispatch import _dispatch
+from pydantic import ValidationError, create_model
 
 import mowjsub
 from mowjsub import LOGGER
@@ -79,70 +63,94 @@ def _show_version(ctx, param, value):
 EXISTING_PATH = click.Path(exists=True, path_type=Path)
 
 
-def make_command(step, *, positional: str | None = None, must_exist: Iterable[str] = ()) -> click.Command:
-    """Build a `click.Command` for a `@shinobi.pystep` StepRef.
+def _click_type(annotation):
+    """Map the small public parameter vocabulary explicitly; refuse unknown types."""
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        types = [item for item in get_args(annotation) if item is not type(None)]
+        if len(types) == 1:
+            return _click_type(types[0])
+    if origin is Literal:
+        return click.Choice(get_args(annotation))
+    if annotation is Path:
+        return click.Path(path_type=Path)
+    if annotation in (str, int, float, bool):
+        return annotation
+    raise TypeError(f"Unsupported CLI parameter type: {annotation!r}")
 
-    Args:
-        step: The ``StepRef`` produced by ``@shinobi.pystep``.
-        positional: Name of the input field to render as a ``click.Argument``
-            rather than an option -- ``build_options`` only emits ``--options``.
-            This is the scabha ``policies.positional`` equivalent.
-        must_exist: Names of input fields click should check exist before the
-            step is dispatched. The scabha ``must_exist: yes`` equivalent, and
-            like ``positional`` it is a policy rather than a type, so the
-            signature cannot carry it: ``Path`` says what the value is, not
-            whether it has to be there already. Without this a missing input
-            surfaces as whatever the reader raises somewhere inside the run --
-            a bare ``FileNotFoundError`` traceback rather than a usage error
-            naming the parameter.
 
-    Returns:
-        click.Command: Its callback re-nests the flat kwargs and dispatches the
-        step in process, exactly as ``shinobi.cli``'s ``run`` does. An exception
-        raised inside the step propagates with its message intact, which is what
-        the error-path tests read.
+def make_command(func, *, name: str | None = None, info: str | None = None, positional: str | None = None, must_exist: Iterable[str] = ()) -> click.Command:
+    """Build a command from a typed function with Pydantic Field defaults.
+
+    ``positional`` and ``must_exist`` are CLI policies keyed by parameter name.
+    The callback validates parsed values and calls the function directly, so
+    processing exceptions retain their original type and message.
     """
-    model = step.step.inputs_model
+    name = name or func.__name__.lstrip("_").replace("_", "-")
+    hints = get_type_hints(func)
+    fields = {key: (hints[key], ... if value.default is inspect.Parameter.empty else value.default) for key, value in inspect.signature(func).parameters.items()}
+    model = create_model(f"{func.__name__}Inputs", **fields)
     must_exist = set(must_exist)
+    for policy, names in (("must_exist", must_exist), ("positional", {positional} if positional else set())):
+        unknown = names - set(model.model_fields)
+        if unknown:
+            raise ValueError(f"make_command({policy}=...) names {sorted(unknown)}, which {name!r} has no parameter for.")
 
-    unknown = must_exist - set(model.model_fields)
-    if unknown:
-        raise ValueError(f"make_command(must_exist=...) names {sorted(unknown)}, which {step.step.name!r} has no parameter for.")
-
-    params: list[click.Parameter] = [
-        click.Option(
-            ["--version"],
-            is_flag=True,
-            expose_value=False,
-            is_eager=True,
-            callback=_show_version,
-            help="Show the version and exit.",
+    params: list[click.Parameter] = [click.Option(["--version"], is_flag=True, expose_value=False, is_eager=True, callback=_show_version, help="Show the version and exit.")]
+    for key, field in model.model_fields.items():
+        annotation = field.annotation
+        multiple = get_origin(annotation) is list
+        param_type = _click_type(get_args(annotation)[0] if multiple else annotation)
+        if key in must_exist:
+            if not isinstance(param_type, click.Path):
+                raise TypeError(f"must_exist parameter {key!r} must be a Path")
+            param_type = EXISTING_PATH
+        required = field.is_required()
+        default = None if required else field.get_default(call_default_factory=True)
+        if key == positional:
+            params.append(click.Argument([key], required=required, **({} if required else {"default": default}), type=param_type))
+            continue
+        flag = annotation is bool
+        option = "--" + key.replace("_", "-")
+        declarations = [f"{option}/--no-{key.replace('_', '-')}" if flag else option]
+        abbreviation = (field.json_schema_extra or {}).get("abbreviation")
+        if abbreviation:
+            declarations.append("-" + abbreviation)
+        params.append(
+            click.Option(
+                declarations,
+                type=param_type,
+                required=required,
+                **({} if required else {"default": default}),
+                multiple=multiple,
+                is_flag=flag,
+                help=field.description,
+                show_default=True,
+            )
         )
-    ]
-
-    for option in build_options(model):
-        if option.name in must_exist:
-            # An optional input is only checked when one is actually given;
-            # click leaves a default of None alone.
-            option.type = EXISTING_PATH
-
-        if option.name == positional:
-            params.append(click.Argument([positional], required=True, type=option.type))
-        else:
-            params.append(option)
 
     def _callback(**raw):
-        # Before dispatch, so anything the step logs on its way in is carried.
-        configure_logging(raw.get("loglevel", "info"))
-        kwargs = unflatten_kwargs(model, raw)
-        result = _dispatch(step.step, step.func, **kwargs)
-        if not result.success:
-            raise click.ClickException(f"{step.step.name!r} failed (returncode {result.returncode}).")
+        try:
+            values = model(**raw)
+        except ValidationError as error:
+            raise click.UsageError(str(error)) from error
+        configure_logging(getattr(values, "loglevel", "info"))
+        return func(**{key: getattr(values, key) for key in model.model_fields})
 
-    return click.Command(
-        name=step.step.name,
-        params=params,
-        callback=_callback,
-        help=step.step.info,
-        no_args_is_help=True,
-    )
+    return click.Command(name=name, params=params, callback=_callback, help=info or inspect.getdoc(func), no_args_is_help=True)
+
+
+def optional_step(namespace, attribute, func, *, name, info):
+    """Resolve and cache genuine StepRefs only when an integration is requested."""
+    public_name = func.__name__.lstrip("_")
+    if attribute not in ("step", public_name):
+        raise AttributeError(f"module {namespace['__name__']!r} has no attribute {attribute!r}")
+    try:
+        import shinobi
+    except ModuleNotFoundError as error:
+        if error.name != "shinobi":
+            raise
+        raise ModuleNotFoundError("Stimela integration requires the optional extra: pip install 'mowjsub[ninja]'", name="shinobi") from error
+    step = shinobi.pystep(name=name, info=info)(func)
+    namespace["step"] = namespace[public_name] = step
+    return step

@@ -16,9 +16,7 @@ dependencies = [
 	"astropy",
 	"scipy",
 	"xarray",
-	# Stimela 3. Each entry point is a `@shinobi.pystep` whose typed signature
-	# is the schema, replacing scabha's YAML parser configs.
-	"stimela-ninja>=0.1.0b5",
+	"click>=8.1",
 	"pydantic>=2.6",
 	"zarr",
 	"tqdm",
@@ -30,12 +28,14 @@ dependencies = [
 ]
 
 
-# Dev-time override: 0.2.1 is merged upstream but not yet on PyPI, so resolve
-# fitstoolz from that commit until it is released. Delete this table once 0.2.1
-# is published -- the `fitstoolz>=0.2.1` constraint above is what consumers
-# resolve against either way, so nothing else has to change.
+# Development-only source: merged fitstoolz#30 makes Stimela optional.
+# Remove this override after a fixed PyPI release and raise the dependency floor.
+# Built wheels retain fitstoolz>=0.2.1 and resolve published dependencies.
 [tool.uv.sources]
-fitstoolz = { url = "https://github.com/shinobi-dosho/fitstoolz/archive/6a560bec2bda6221050a8f620918a7fe1cc85c8a.tar.gz" }
+fitstoolz = { url = "https://github.com/shinobi-dosho/fitstoolz/archive/6a4627c5687c49f66b2e2c298bdde2193f524b6e.tar.gz" }
+
+[project.optional-dependencies]
+ninja = ["stimela-ninja>=0.1.0b5"]
 
 [tool.hatch.build.targets.sdist]
 include = [

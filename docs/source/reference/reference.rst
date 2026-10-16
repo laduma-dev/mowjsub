@@ -8,7 +8,7 @@ Reference
 
 .. Point sphinx-click at ``command``, not ``runit``. Since the port to Stimela 3
 .. ``runit`` is a plain function taking an options namespace, and the
-.. ``click.Command`` the console script installs is built from the pystep
+.. ``click.Command`` the console script installs is built from the typed function
 .. separately. Naming ``runit`` here is not a broken link but an empty page:
 .. sphinx-click raises "is not click.Command or click.Group" and drops the whole
 .. directive, and the docs still build.

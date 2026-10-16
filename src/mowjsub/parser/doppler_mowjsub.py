@@ -8,13 +8,12 @@ from typing import Literal
 
 import dask
 import dask.array as da
-import shinobi
 from daskms import xds_from_ms, xds_to_table
 from pydantic import Field
 from tqdm.dask import TqdmCallback
 
 from mowjsub import BIN, LOGGER
-from mowjsub.parser._cli import make_command
+from mowjsub.parser._cli import make_command, optional_step
 from mowjsub.utils import (
     doppler_regrid_dataset,
     finalise_regridded_ms,
@@ -97,11 +96,7 @@ def runit(opts):
     log.info(f"Runtime {hours}:{int(mins)}:{secs:.1f}")
 
 
-@shinobi.pystep(
-    name=app,
-    info="Doppler-correct an already continuum-subtracted Measurement Set (MS) onto a channel grid fixed in a chosen spectral frame",
-)
-def doppler_mowjsub(
+def _doppler_mowjsub(
     ms: Path = Field(..., description="Input MS file. Its continuum must already have been subtracted; this command does no fitting."),
     input_column: str = Field(
         ...,
@@ -157,8 +152,10 @@ def doppler_mowjsub(
     return runit(opts)
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically without knowing the function's own name.
-step = doppler_mowjsub
+_STEP_INFO = "Doppler-correct an already continuum-subtracted Measurement Set (MS) onto a channel grid fixed in a chosen spectral frame"
 
-command = make_command(doppler_mowjsub, positional="ms", must_exist=("ms",))
+command = make_command(_doppler_mowjsub, name=app, info=_STEP_INFO, positional="ms", must_exist=("ms",))
+
+
+def __getattr__(name):
+    return optional_step(globals(), name, _doppler_mowjsub, name=app, info=_STEP_INFO)

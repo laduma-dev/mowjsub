@@ -10,7 +10,6 @@ from typing import Literal
 import dask
 import dask.array as da
 import numpy as np
-import shinobi
 import xarray as xr
 from daskms import xds_from_ms, xds_to_table
 from pydantic import Field
@@ -22,7 +21,7 @@ from mowjsub.fitfuncs import (
     WIDTH_MODELS,
     build_fitfunc,
 )
-from mowjsub.parser._cli import make_command
+from mowjsub.parser._cli import make_command, optional_step
 from mowjsub.utils import (
     copy_ms_subtables,
     doppler_regrid_dataset,
@@ -244,8 +243,7 @@ def runit(opts):
     log.info(f"Runtime {hours}:{int(mins)}:{secs:.1f}")
 
 
-@shinobi.pystep(name=app, info="Perform visibility plane continuum subtraction on an input Measurement Set (MS)")
-def vis_mowjsub(
+def _vis_mowjsub(
     ms: Path = Field(..., description="Input MS file"),
     input_column: str = Field("DATA", description="Column which contains the data to be continuum subtracted."),
     output_column: str = Field(
@@ -347,8 +345,10 @@ def vis_mowjsub(
     return runit(opts)
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically without knowing the function's own name.
-step = vis_mowjsub
+_STEP_INFO = "Perform visibility plane continuum subtraction on an input Measurement Set (MS)"
 
-command = make_command(vis_mowjsub, positional="ms", must_exist=("ms",))
+command = make_command(_vis_mowjsub, name=app, info=_STEP_INFO, positional="ms", must_exist=("ms",))
+
+
+def __getattr__(name):
+    return optional_step(globals(), name, _vis_mowjsub, name=app, info=_STEP_INFO)

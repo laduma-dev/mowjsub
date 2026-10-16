@@ -10,7 +10,6 @@ from typing import Literal
 import dask
 import dask.array as da
 import numpy as np
-import shinobi
 import xarray as xr
 from pydantic import Field
 
@@ -21,7 +20,7 @@ from mowjsub.fitfuncs import (
     build_fitfunc,
 )
 from mowjsub.image_plane import ContSub
-from mowjsub.parser._cli import make_command
+from mowjsub.parser._cli import make_command, optional_step
 from mowjsub.utils import (
     apply_cube_doppler,
     get_automask,
@@ -243,8 +242,7 @@ def runit(opts):
     log.info(f"Finished. Runtime {hours}:{int(mins)}:{secs:.1f}")
 
 
-@shinobi.pystep(name=app, info="Perform image plane continuum subtraction on an input FITS file")
-def im_mowjsub(
+def _im_mowjsub(
     input_image: Path = Field(..., description="Input image"),
     output_prefix: str | None = Field(None, description="Name of ouput image"),
     mask_image: Path | None = Field(None, description="Mask image"),
@@ -366,8 +364,10 @@ def im_mowjsub(
     return runit(opts)
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically without knowing the function's own name.
-step = im_mowjsub
+_STEP_INFO = "Perform image plane continuum subtraction on an input FITS file"
 
-command = make_command(im_mowjsub, positional="input_image", must_exist=("input_image", "mask_image"))
+command = make_command(_im_mowjsub, name=app, info=_STEP_INFO, positional="input_image", must_exist=("input_image", "mask_image"))
+
+
+def __getattr__(name):
+    return optional_step(globals(), name, _im_mowjsub, name=app, info=_STEP_INFO)

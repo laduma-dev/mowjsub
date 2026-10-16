@@ -139,11 +139,10 @@ This replaced a `subtract_fits` that took *paths*: it wrote the continuum, then 
 
 ### CLI parameters: the signature is the schema
 
-Each entry point is a `@shinobi.pystep` (Stimela 3) whose **typed signature is the single schema authority**. To add a CLI option, add a parameter to that function — there are no YAML schemas and no Click decorators to keep in step.
+Each entry point uses a native typed function whose **typed signature is the single schema authority**. To add a CLI option, add a parameter to that function — there are no YAML schemas and no Click decorators to keep in step.
 
 ```python
-@shinobi.pystep(name=app, info="...")
-def im_mowjsub(
+def _im_mowjsub(
     input_image: Path = Field(..., description="Input image"),
     hdu_index: int = Field(0, description="...", json_schema_extra={"abbreviation": "hi"}),
     fit_model: FIT_MODELS = Field("b-spline", description="..."),
@@ -151,17 +150,35 @@ def im_mowjsub(
     return runit(SimpleNamespace(**locals()))
 ```
 
-The scabha equivalents map onto it directly: `dtype: File` → `Path`, `choices:` → a `Literal`, `required: yes` → `Field(...)`, `abbreviation:` → `json_schema_extra`, `policies.repeat` → a `list[...]` annotation. Two are **not** types, and so cannot live in the signature at all -- `Path` says what a value is, not where it sits on the command line or whether it is already there. Both are arguments to `parser/_cli.py:make_command`: `policies.positional` → `positional=`, which renders that field as a `click.Argument` since shinobi's `build_options` only emits `--options`; `must_exist: yes` → `must_exist=`, which swaps the field's type for `click.Path(exists=True)` so a missing input is a usage error naming the parameter rather than whatever the reader raises mid-run.
+The scabha equivalents map onto it directly: `dtype: File` → `Path`, `choices:` → a `Literal`, `required: yes` → `Field(...)`, `abbreviation:` → `json_schema_extra`, `policies.repeat` → a `list[...]` annotation. Two are **not** types, and so cannot live in the signature at all -- `Path` says what a value is, not where it sits on the command line or whether it is already there. Both are arguments to `parser/_cli.py:make_command`: `policies.positional` → `positional=`, which renders that field as a `click.Argument` instead of an option; `must_exist: yes` → `must_exist=`, which swaps the field's type for `click.Path(exists=True)` so a missing input is a usage error naming the parameter rather than whatever the reader raises mid-run.
 
 Both are keyed by **field name**, so a rename silently stops them applying. `make_command` raises on a `must_exist` entry the model has no field for, and `tests/test_cli.py::TestMakeCommand` pins that -- the failure mode being guarded is the command continuing to work while the check quietly does nothing.
 
 `utils.require_distinct_ms` is the other guard around destructive I/O, alongside `require_topocentric`/`require_topocentric_cube`: `vis-mowjsub` and `doppler-mowjsub` both call it before opening anything, because `output_ms_dataset` plus `xds_to_table` would otherwise write the input MS on top of itself while the fit was still reading it. Compare paths resolved -- a trailing slash, a relative path and a symlink all name the same MS.
 
-Each module exposes three names: `runit(opts)` does the work against a namespace, `step` is the `StepRef` (so a Stimela 3 recipe can use it directly), and `command` is the `click.Command` the console script points at. **The console scripts point at `command`, not `runit`** — `runit` is a plain function now, so tests drive `command` through `CliRunner`.
+Each module exposes `runit(opts)` for processing and `command` for the native
+Click CLI. Its private typed function (`_im_mowjsub`, `_vis_mowjsub`, or
+`_doppler_mowjsub`) supplies the schema to `_cli.make_command` via
+`inspect.signature`, `get_type_hints`, and Pydantic `create_model`. Commands
+validate values then call that function directly; processing errors retain
+their original messages and exception types.
 
-The callback dispatches through shinobi's `_dispatch`, which propagates an exception from inside the step with its message intact — the error-path tests read those messages, so don't swap it for a bare call.
+The optional `ninja` extra supplies `stimela-ninja`. Module `__getattr__` creates
+and caches genuine StepRefs only when `step` or the original public function
+name is requested. Both `module:step` and `module:im_mowjsub` (and corresponding
+visibility/Doppler names) remain supported Ninja targets. Native parser imports,
+help, version, and `runit` do not import shinobi. Missing optional integration
+raises an error naming `pip install 'mowjsub[ninja]'`.
 
-The Stimela 2 cab YAMLs under `mowjsub/stimelating/` are gone. A pystep *is* a step, so the cabs were a second copy of every parameter with nothing keeping the two honest. A Stimela 2 pipeline that `_include`d `(mowjsub.stimelating)mowjsub_cabs.yaml` needs updating to use the steps directly.
+The Stimela 2 cab YAMLs are gone; Stimela 3 consumes the optional StepRefs.
+Local `uv` development pins the merged fitstoolz#30 source in
+`[tool.uv.sources]`, so its locked base graph excludes Stimela. This override
+is development-only: wheel metadata retains `fitstoolz>=0.2.1`. Remove the
+override and raise that floor after a fixed PyPI release is published.
+The wheel CI checks fresh base and extra environments outside the source tree.
+Its base graph assertion must remain strict even while upstream fitstoolz still
+pulls the framework transitively; do not remove FITS support or skip dependencies
+to make the check pass.
 
 ### Logging
 
@@ -169,7 +186,8 @@ One logger, named `mowjsub` (`LOGGER`). Library modules take it with `logging.ge
 
 ### Key dependencies
 
-- `stimela-ninja` (`shinobi`) — Stimela 3: `pystep`, `clickutil.build_options`, step dispatch
+- `click` — native command parsing
+- Optional `stimela-ninja` (`shinobi`), via `[ninja]` — Stimela 3 StepRefs
 - `pydantic` — the parameter models behind those signatures
 - `fitstoolz` — FITS I/O (`FitsData`); reading cubes, axis naming by WCS
 - `dask-ms` — Measurement Set I/O
