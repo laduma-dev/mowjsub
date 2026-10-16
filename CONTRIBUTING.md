@@ -208,9 +208,6 @@ Stimela StepRefs. The ordinary suite checks imports with framework imports block
 CI builds a wheel, installs base and `[ninja]` in separate fresh environments,
 and runs `scripts/check_wheel_install.py` outside the checkout. The base check
 inspects installed distributions and rejects transitive framework dependencies.
-Wheel installation uses published dependencies and the base graph check
-fails until fitstoolz's optional-framework release is published. Do not hide
-that wheel check failure with `--no-deps` or an override. Local `uv` development
-uses an immutable merged fitstoolz source override that already makes Stimela
-optional. Remove that override and raise the fitstoolz floor when the fixed
-release is published; wheel metadata continues to use `fitstoolz>=0.2.1` until then.
+Wheel installation and local development both use published `fitstoolz>=0.2.2`,
+which makes Stimela optional. Keep the base dependency graph assertion strict;
+do not bypass it with `--no-deps` or a source override.

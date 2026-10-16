@@ -25,8 +25,6 @@ use the steps from Stimela 3 / Ninja::
 
 For development, use ``uv sync --extra ninja`` to include integration tests.
 
-The current published fitstoolz 0.2.1 dependency still installs Stimela
-transitively. A fitstoolz release incorporating its issue #30 is required for
-a wheel's resolved base environment to exclude the framework. Local ``uv``
-development uses an immutable source override containing that fix, so the
-locked base environment already excludes Stimela.
+The base installation requires fitstoolz 0.2.2 or newer, which also makes
+Stimela optional. Both local development and wheel installations use the
+published dependency.

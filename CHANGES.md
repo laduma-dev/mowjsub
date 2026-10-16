@@ -8,10 +8,9 @@ project's former name, **contsub**.
 - Build the standalone CLIs directly from typed signatures without importing
   Stimela. Install `mowjsub[ninja]` for lazily created genuine Stimela 3
   StepRefs; existing `module:step` and function-name targets remain supported.
-  Published fitstoolz 0.2.1 still pulls Stimela transitively until its optional
-  framework release (fitstoolz#30); isolated wheel CI checks this explicitly.
-  Local uv development pins the merged fix through a source override, so its
-  locked base graph already excludes Stimela.
+  Require published fitstoolz 0.2.2 or newer so both the locked development
+  environment and installed base wheels exclude Stimela. Isolated wheel CI
+  checks the resolved dependency graph explicitly.
 
 ## 2.0.1 — 2026-08-04
 

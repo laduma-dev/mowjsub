@@ -267,8 +267,8 @@ wheels = [
 
 [[package]]
 name = "fitstoolz"
-version = "0.2.1"
-source = { url = "https://github.com/shinobi-dosho/fitstoolz/archive/6a4627c5687c49f66b2e2c298bdde2193f524b6e.tar.gz" }
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astropy" },
     { name = "click" },
@@ -279,20 +279,10 @@ dependencies = [
     { name = "pydantic" },
     { name = "xarray" },
 ]
-sdist = { hash = "sha256:813abdcdc0fc1618df20d14ca86badf3579c9ca59ac60da462a5d31f45fb684d" }
-
-[package.metadata]
-requires-dist = [
-    { name = "astropy", specifier = ">=7.0,<9.0" },
-    { name = "click", specifier = ">=8.3.3" },
-    { name = "dask", extras = ["array"], specifier = ">=2023.1.1" },
-    { name = "fsspec", specifier = ">=2026.6.0" },
-    { name = "numpy", specifier = ">=2.0" },
-    { name = "pydantic", specifier = ">=2.6" },
-    { name = "stimela-ninja", marker = "extra == 'ninja'", specifier = ">=0.1.0b5" },
-    { name = "xarray", specifier = ">=2023.1.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/bc/34/9427f0067f083ad07d620527a5661a24406ceaf43a1035cded09dc8e8e24/fitstoolz-0.2.2.tar.gz", hash = "sha256:a375e5a307feb8edfb9ba5f2b1736e9d8234f46f36821705ab1cbb57f7d8a45f", size = 79914, upload-time = "2026-10-16T12:43:41.804Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/48/c1ef62f0e1029caf5aafa949bdc6aeabe72e863d966ea1583d358ea85d34/fitstoolz-0.2.2-py3-none-any.whl", hash = "sha256:b3045d9fdc9d5843304825424a55cfcb0a2813763937c33800f12feed8b44356", size = 39672, upload-time = "2026-10-16T12:43:40.792Z" },
 ]
-provides-extras = ["ninja"]
 
 [[package]]
 name = "fsspec"
@@ -522,7 +512,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "dask" },
     { name = "dask-ms" },
-    { name = "fitstoolz", url = "https://github.com/shinobi-dosho/fitstoolz/archive/6a4627c5687c49f66b2e2c298bdde2193f524b6e.tar.gz" },
+    { name = "fitstoolz", specifier = ">=0.2.2" },
     { name = "numpy" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "scipy" },

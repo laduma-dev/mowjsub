@@ -22,17 +22,10 @@ dependencies = [
 	"tqdm",
 	"dask-ms",
 	"dask",
-	# The FITS reader. `>=0.2.1` for `FitsData(hdu=...)`, which is what lets
-	# `--hdu-index` keep working.
-	"fitstoolz>=0.2.1",
+	# The FITS reader. >=0.2.2 makes Stimela optional and retains HDU selection.
+	"fitstoolz>=0.2.2",
 ]
 
-
-# Development-only source: merged fitstoolz#30 makes Stimela optional.
-# Remove this override after a fixed PyPI release and raise the dependency floor.
-# Built wheels retain fitstoolz>=0.2.1 and resolve published dependencies.
-[tool.uv.sources]
-fitstoolz = { url = "https://github.com/shinobi-dosho/fitstoolz/archive/6a4627c5687c49f66b2e2c298bdde2193f524b6e.tar.gz" }
 
 [project.optional-dependencies]
 ninja = ["stimela-ninja>=0.1.0b5"]

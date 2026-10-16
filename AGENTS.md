@@ -171,14 +171,11 @@ help, version, and `runit` do not import shinobi. Missing optional integration
 raises an error naming `pip install 'mowjsub[ninja]'`.
 
 The Stimela 2 cab YAMLs are gone; Stimela 3 consumes the optional StepRefs.
-Local `uv` development pins the merged fitstoolz#30 source in
-`[tool.uv.sources]`, so its locked base graph excludes Stimela. This override
-is development-only: wheel metadata retains `fitstoolz>=0.2.1`. Remove the
-override and raise that floor after a fixed PyPI release is published.
-The wheel CI checks fresh base and extra environments outside the source tree.
-Its base graph assertion must remain strict even while upstream fitstoolz still
-pulls the framework transitively; do not remove FITS support or skip dependencies
-to make the check pass.
+Both local development and wheel installations require published
+`fitstoolz>=0.2.2`, whose Stimela integration is optional. There is no source
+override. The wheel CI checks fresh base and extra environments outside the
+source tree. Keep its base dependency graph assertion strict; do not remove
+FITS support or skip dependencies to make the check pass.
 
 ### Logging
 

@@ -35,11 +35,9 @@ library use the base install. To use mowjsub steps in Ninja recipes::
 
     pip install 'mowjsub[ninja]'
 
-The current published fitstoolz 0.2.1 dependency still installs Stimela
-transitively. A fitstoolz release incorporating its issue #30 is required for
-a wheel's resolved base environment to exclude the framework. Local ``uv``
-development uses an immutable source override containing that fix, so the
-locked base environment already excludes Stimela.
+The base installation requires fitstoolz 0.2.2 or newer, which also makes
+Stimela optional. Both local development and wheel installations use the
+published dependency.
 
 Existing targets such as ``mowjsub.parser.im_mowjsub:step`` and
 ``mowjsub.parser.im_mowjsub:im_mowjsub`` resolve to genuine Stimela StepRefs
