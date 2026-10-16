@@ -3,6 +3,15 @@
 Notable changes to mowjsub. Versions before 2.0 were released under the
 project's former name, **contsub**.
 
+## Unreleased
+
+- Build the standalone CLIs directly from typed signatures without importing
+  Stimela. Install `mowjsub[ninja]` for lazily created genuine Stimela 3
+  StepRefs; existing `module:step` and function-name targets remain supported.
+  Require published fitstoolz 0.2.2 or newer so both the locked development
+  environment and installed base wheels exclude Stimela. Isolated wheel CI
+  checks the resolved dependency graph explicitly.
+
 ## 2.0.1 — 2026-08-04
 
 ### Changed

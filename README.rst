@@ -30,6 +30,20 @@ Latest (in development)
     pip install git+https://github.com/laduma-dev/mowjsub.git
 
 
+Stimela 3 integration is optional. The three console commands and Python
+library use the base install. To use mowjsub steps in Ninja recipes::
+
+    pip install 'mowjsub[ninja]'
+
+The base installation requires fitstoolz 0.2.2 or newer, which also makes
+Stimela optional. Both local development and wheel installations use the
+published dependency.
+
+Existing targets such as ``mowjsub.parser.im_mowjsub:step`` and
+``mowjsub.parser.im_mowjsub:im_mowjsub`` resolve to genuine Stimela StepRefs
+when the extra is installed. The visibility and Doppler modules expose the
+same two forms.
+
 Using uv (Recommended development install)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 The package requires Python >=3.11, so uv is the recommended way to install

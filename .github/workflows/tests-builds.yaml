@@ -72,3 +72,42 @@ jobs:
       run: uv run pytest
     - name: Audit dependencies
       run: uv run --with pip-audit python -m pip_audit --progress-spinner off --skip-editable
+
+  wheel-install:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        extra: [base, ninja]
+    steps:
+    - uses: actions/checkout@v7
+    - uses: astral-sh/setup-uv@v7
+      with:
+        python-version: "3.13"
+    - name: Check optional step schemas and dispatch
+      if: matrix.extra == 'ninja'
+      run: uv run --locked --extra ninja pytest tests/test_optional_ninja.py
+    - name: Build wheel
+      run: uv build --wheel
+    - name: Install wheel in a separate environment
+      shell: bash
+      run: |
+        uv venv /tmp/mowjsub-wheel
+        wheel=$(realpath dist/*.whl)
+        if [ '${{ matrix.extra }}' = ninja ]; then
+          uv pip install --python /tmp/mowjsub-wheel/bin/python "${wheel}[ninja]"
+        else
+          uv pip install --python /tmp/mowjsub-wheel/bin/python "$wheel"
+        fi
+    - name: Check installed package and dependency graph outside checkout
+      shell: bash
+      run: |
+        cp scripts/check_wheel_install.py /tmp/check_mowjsub_wheel.py
+        cd /tmp
+        export PATH="/tmp/mowjsub-wheel/bin:$PATH"
+        if [ '${{ matrix.extra }}' = ninja ]; then
+          python check_mowjsub_wheel.py --ninja
+        else
+          python check_mowjsub_wheel.py
+        fi

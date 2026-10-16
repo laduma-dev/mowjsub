@@ -156,3 +156,17 @@ The axis order does not matter. Each axis is matched by what the WCS calls it, n
 A cube already on a non-topocentric grid is refused rather than corrected twice, exactly as an already-regridded MS is. mowjsub reads ``SPECSYS`` to decide, so a cube imaged from an ``mstransform`` output, or one an earlier :command:`im-mowjsub --doppler-frame` run produced, is caught. A cube with no ``SPECSYS`` at all is taken on trust.
 
 If the spectral axis is a velocity (``VOPT``, ``VRAD``, ``VELO``) or a wavelength (``WAVE``) rather than a frequency, it is converted using the Doppler convention the ``CTYPE`` names and the header's ``RESTFRQ``. A velocity axis with no rest frequency in the header is refused; pass ``--rest-freq`` in MHz to supply one. This applies to :command:`im-mowjsub` as a whole, not just the Doppler path — the fitters size their spline segments and filter windows off the same channel grid.
+
+Stimela 3 / Ninja
+----------------
+
+With ``mowjsub[ninja]`` installed, use a module's ``step`` attribute or its
+original function name as the step target. For example::
+
+    ninja run mowjsub.parser.im_mowjsub:step --help
+    ninja run mowjsub.parser.vis_mowjsub:vis_mowjsub --help
+    ninja run mowjsub.parser.doppler_mowjsub:step --help
+
+The StepRefs are created on first access. Ordinary command invocation and
+``runit(opts)`` calls do not import the optional framework. Both interfaces
+share the same typed parameter definitions.

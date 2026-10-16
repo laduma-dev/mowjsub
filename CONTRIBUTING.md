@@ -18,12 +18,12 @@ of machinery. Two conventions in this repo are worth knowing before you start:
   `velwidth` (km/s) into a channel count. Raise `BadFitError` when a spectrum
   has too few valid points; the callers turn those spectra into NaN rather than
   guessing.
-- **CLI options live in YAML, not in decorators.** Parameters are declared in
-  `src/mowjsub/parser/im_mowjsub.yaml` and `vis_mowjsub.yaml`, loaded through
-  scabha's `paramfile_loader` and turned into Click options by
-  `clickify_parameters`. Add a new option by editing the schema — hand-written
-  `@click.option` decorators will drift out of step with the stimela cabs in
-  `src/mowjsub/stimelating/`.
+- **CLI options come from typed signatures.** Add parameters and Pydantic
+  `Field` metadata to the native functions in `src/mowjsub/parser/`.
+  `_cli.make_command` derives Click parameters directly. Optional Stimela
+  StepRefs are built lazily from those same functions with `mowjsub[ninja]`.
+  Keep positional and existing-path policies in `make_command` calls.
+
 
 The Doppler path (`src/mowjsub/doppler.py`) has two load-bearing details that
 are easy to "fix" into being wrong: the topocentric-to-barycentric step is a
@@ -35,7 +35,7 @@ touching it.
 ## Ways to contribute
 
 - **Add a fitting function** — subclass `FitFunc`, and expose it through the
-  CLI schemas so both the CLI and the stimela cab pick it up.
+  typed signatures so both the CLI and the optional Stimela steps pick it up.
 - **Report bugs** and request features via
   [issues](https://github.com/laduma-dev/mowjsub/issues). For a fitting or
   regridding bug, the input header or `SPECTRAL_WINDOW` details and the exact
@@ -200,3 +200,14 @@ Participation in this project is governed by the
 
 By contributing, you agree that your contributions are licensed under the
 project's [MIT License](LICENSE).
+
+### Optional integration and wheel checks
+
+Run `uv run --extra ninja pytest tests/test_optional_ninja.py` to exercise genuine
+Stimela StepRefs. The ordinary suite checks imports with framework imports blocked.
+CI builds a wheel, installs base and `[ninja]` in separate fresh environments,
+and runs `scripts/check_wheel_install.py` outside the checkout. The base check
+inspects installed distributions and rejects transitive framework dependencies.
+Wheel installation and local development both use published `fitstoolz>=0.2.2`,
+which makes Stimela optional. Keep the base dependency graph assertion strict;
+do not bypass it with `--no-deps` or a source override.

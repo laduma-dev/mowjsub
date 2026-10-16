@@ -1,6 +1,6 @@
 """The click layer in `mowjsub.parser._cli`.
 
-A pystep's typed signature is the schema, but two things are policy rather than
+A function's typed signature is the schema, but two things are policy rather than
 type and so cannot live in it: which field is positional, and which fields have
 to exist before the step runs. ``Path`` says what a value is, not whether it is
 already there. Both are arguments to ``make_command``, and these check the
@@ -19,8 +19,8 @@ from click.testing import CliRunner
 
 from mowjsub import utils
 from mowjsub.parser._cli import make_command
+from mowjsub.parser.doppler_mowjsub import _doppler_mowjsub
 from mowjsub.parser.doppler_mowjsub import command as doppler_command
-from mowjsub.parser.doppler_mowjsub import doppler_mowjsub
 from mowjsub.parser.im_mowjsub import command as im_command
 from mowjsub.parser.vis_mowjsub import command as vis_command
 
@@ -160,7 +160,7 @@ class TestMakeCommand(unittest.TestCase):
         would keep working, and only a missing file would reveal it.
         """
         with self.assertRaises(ValueError) as raised:
-            make_command(doppler_mowjsub, positional="ms", must_exist=("ms", "no_such_field"))
+            make_command(_doppler_mowjsub, positional="ms", must_exist=("ms", "no_such_field"))
 
         assert "no_such_field" in str(raised.exception)
 
